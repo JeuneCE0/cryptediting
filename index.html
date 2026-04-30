@@ -467,6 +467,11 @@ const TodayView = ({ projects, invoices, clients, onSelectProject, onUpdateProje
     onUpdateProject({ ...project, tasks });
     toast?.(`✓ ${next.label}`);
   };
+  const logHour = (project) => {
+    const next = Math.round(((project.hoursLogged || 0) + 1) * 2) / 2;
+    onUpdateProject({ ...project, hoursLogged: next });
+    toast?.(`+1h · ${project.title} (${next}h)`, 'info');
+  };
 
   const sendInvoiceReminder = (inv) => {
     const client = clients.find(c => c.id === inv.clientId);
@@ -566,9 +571,17 @@ const TodayView = ({ projects, invoices, clients, onSelectProject, onUpdateProje
                       {c?.company}
                       <span className="mx-1.5 text-zinc-700">·</span>
                       <span className="font-mono">{doneT}/{totalT}</span>
+                      {(p.hoursLogged || 0) > 0 && <><span className="mx-1.5 text-zinc-700">·</span><span className="font-mono">{p.hoursLogged}h</span></>}
                     </div>
                   </button>
-                  <div className="text-right flex-shrink-0">
+                  <button
+                    onClick={() => logHour(p)}
+                    title="Logger 1 heure"
+                    className="text-[10px] text-amber-300 hover:text-amber-200 px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded font-mono transition-colors flex-shrink-0"
+                  >
+                    +1h
+                  </button>
+                  <div className="text-right flex-shrink-0 min-w-[3rem]">
                     <div className={`text-xs font-mono ${overdue ? 'text-rose-400' : urgent ? 'text-amber-400' : 'text-zinc-500'}`}>
                       {overdue ? `J+${Math.abs(days)}` : days === 0 ? "Auj." : `J-${days}`}
                     </div>
@@ -892,9 +905,14 @@ const ProjectsView = ({ projects, clients, onSelectProject, onNewProject, search
                           </div>
                           <div className="font-mono text-zinc-400">{eur(p.budget)}</div>
                         </div>
-                        {(p.revisionHistory?.length || 0) > 0 && (
-                          <div className="mt-2 text-xs text-violet-400 font-mono">⟲ {p.revisionHistory.length} révision{p.revisionHistory.length > 1 ? 's' : ''}</div>
-                        )}
+                        <div className="flex items-center gap-2 mt-2 text-[10px] font-mono">
+                          {(p.hoursLogged || 0) > 0 && (
+                            <span className="text-zinc-500">⏱ {p.hoursLogged}h</span>
+                          )}
+                          {(p.revisionHistory?.length || 0) > 0 && (
+                            <span className="text-violet-400">⟲ {p.revisionHistory.length} rév.</span>
+                          )}
+                        </div>
                       </button>
                     </div>
                   );
