@@ -50,13 +50,14 @@
 <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
 
 <script type="text/babel" data-type="module" data-presets="react">
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   LayoutDashboard, FolderKanban, CalendarDays, Receipt, Users, Plus,
   Search, Bell, ChevronRight, ChevronLeft, X, Edit3,
   Trash2, Clock, FileVideo, CheckCircle2, AlertCircle,
-  Film, Sparkles, TrendingUp, ExternalLink
+  Film, Sparkles, TrendingUp, ExternalLink, Download, RotateCcw,
+  Check, Mail, Phone, Building2, Inbox
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from 'recharts';
 
@@ -130,6 +131,74 @@ const saveStore = (data) => {
   catch (e) { console.error(e); }
 };
 
+// Détecte automatiquement les factures en retard (pending au-delà de la date d'échéance)
+const reconcileInvoiceStatus = (invoices) =>
+  invoices.map(i => (i.status === 'pending' && daysUntil(i.dueDate) < 0) ? { ...i, status: 'overdue' } : i);
+
+// ============ TOAST SYSTEM ============
+const ToastContext = React.createContext(null);
+const useToast = () => React.useContext(ToastContext);
+
+const ToastProvider = ({ children }) => {
+  const [toasts, setToasts] = useState([]);
+  const push = useCallback((message, type = 'success') => {
+    const id = Date.now() + Math.random();
+    setToasts(t => [...t, { id, message, type }]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3500);
+  }, []);
+  return (
+    <ToastContext.Provider value={push}>
+      {children}
+      <div className="fixed bottom-6 right-6 z-[100] space-y-2 pointer-events-none">
+        {toasts.map(t => {
+          const map = {
+            success: { bg: 'bg-emerald-500/15', border: 'border-emerald-500/40', text: 'text-emerald-200', icon: CheckCircle2 },
+            error: { bg: 'bg-rose-500/15', border: 'border-rose-500/40', text: 'text-rose-200', icon: AlertCircle },
+            info: { bg: 'bg-sky-500/15', border: 'border-sky-500/40', text: 'text-sky-200', icon: Sparkles }
+          };
+          const c = map[t.type] || map.success;
+          const Icon = c.icon;
+          return (
+            <div key={t.id} className={`${c.bg} ${c.border} ${c.text} backdrop-blur-md border rounded-lg px-4 py-3 shadow-lg flex items-center gap-2.5 animate-in pointer-events-auto min-w-[220px]`}>
+              <Icon className="w-4 h-4 flex-shrink-0" />
+              <span className="text-sm font-body">{t.message}</span>
+            </div>
+          );
+        })}
+      </div>
+    </ToastContext.Provider>
+  );
+};
+
+// ============ CONFIRM MODAL ============
+const ConfirmModal = ({ open, title, message, confirmLabel = 'Confirmer', danger = false, onConfirm, onCancel }) => {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onCancel}>
+      <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+        <div className="p-5">
+          <h3 className="font-display text-xl text-zinc-100 mb-2">{title}</h3>
+          <p className="text-sm text-zinc-400 font-body">{message}</p>
+        </div>
+        <div className="p-5 pt-0 flex justify-end gap-2">
+          <button onClick={onCancel} className="text-sm px-4 py-2 text-zinc-400 hover:text-zinc-100 font-body">Annuler</button>
+          <button onClick={onConfirm} className={`text-sm px-4 py-2 font-medium rounded-lg ${danger ? 'bg-rose-500 hover:bg-rose-400 text-zinc-50' : 'bg-amber-500 hover:bg-amber-400 text-zinc-950'}`}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ MODAL SHELL (gère ESC) ============
+const useEscape = (active, handler) => {
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e) => { if (e.key === 'Escape') handler(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [active, handler]);
+};
+
 // ============ COMPONENTS ============
 const StagePill = ({ stage, size = 'sm' }) => {
   const meta = stageMeta(stage);
@@ -167,6 +236,13 @@ const KPICard = ({ label, value, sub, accent = 'amber', icon: Icon }) => (
     {sub && <div className="text-xs text-zinc-500 font-body">{sub}</div>}
   </div>
 );
+
+// ============ SEARCH HELPER ============
+const matchesQuery = (q, ...fields) => {
+  if (!q) return true;
+  const needle = q.toLowerCase().trim();
+  return fields.some(f => (f || '').toString().toLowerCase().includes(needle));
+};
 
 // ============ DASHBOARD VIEW ============
 const DashboardView = ({ projects, invoices, clients, onSelectProject, onNewProject }) => {
@@ -272,7 +348,7 @@ const DashboardView = ({ projects, invoices, clients, onSelectProject, onNewProj
                   </div>
                   <div className="text-right">
                     <div className={`font-mono text-sm ${overdue ? 'text-rose-400' : urgent ? 'text-amber-400' : 'text-zinc-300'}`}>{fmtDate(p.deadline)}</div>
-                    <div className="text-xs text-zinc-500 font-mono">{overdue ? `J${days}` : days === 0 ? "aujourd'hui" : `J-${days}`}</div>
+                    <div className="text-xs text-zinc-500 font-mono">{overdue ? `J+${Math.abs(days)}` : days === 0 ? "aujourd'hui" : `J-${days}`}</div>
                   </div>
                   <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 transition-colors" />
                 </button>
@@ -302,9 +378,15 @@ const DashboardView = ({ projects, invoices, clients, onSelectProject, onNewProj
 };
 
 // ============ PROJECTS VIEW (KANBAN) ============
-const ProjectsView = ({ projects, clients, onSelectProject, onNewProject }) => {
+const ProjectsView = ({ projects, clients, onSelectProject, onNewProject, searchQuery, onMoveStage }) => {
   const [filterClient, setFilterClient] = useState('all');
-  const filtered = projects.filter(p => filterClient === 'all' || p.clientId === filterClient);
+  const [dragId, setDragId] = useState(null);
+  const [dragOver, setDragOver] = useState(null);
+  const filtered = projects.filter(p => {
+    if (filterClient !== 'all' && p.clientId !== filterClient) return false;
+    const client = clients.find(c => c.id === p.clientId);
+    return matchesQuery(searchQuery, p.title, p.type, p.notes, client?.company, client?.name);
+  });
 
   return (
     <div className="space-y-6 animate-in">
@@ -328,9 +410,21 @@ const ProjectsView = ({ projects, clients, onSelectProject, onNewProject }) => {
         {STAGES.map(stage => {
           const c = STAGE_COLORS[stage.color];
           const stageProjects = filtered.filter(p => p.stage === stage.id);
+          const isOver = dragOver === stage.id;
           return (
-            <div key={stage.id} className="flex flex-col">
-              <div className={`${c.bg} ${c.border} border rounded-lg px-3 py-2.5 mb-3`}>
+            <div
+              key={stage.id}
+              className="flex flex-col"
+              onDragOver={e => { e.preventDefault(); setDragOver(stage.id); }}
+              onDragLeave={() => setDragOver(prev => prev === stage.id ? null : prev)}
+              onDrop={e => {
+                e.preventDefault();
+                if (dragId) onMoveStage(dragId, stage.id);
+                setDragId(null);
+                setDragOver(null);
+              }}
+            >
+              <div className={`${c.bg} ${c.border} border rounded-lg px-3 py-2.5 mb-3 ${isOver ? 'ring-2 ring-amber-400/60' : ''}`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className={`w-2 h-2 rounded-full ${c.dot}`}></span>
@@ -339,37 +433,46 @@ const ProjectsView = ({ projects, clients, onSelectProject, onNewProject }) => {
                   <span className="font-mono text-xs text-zinc-500">{stageProjects.length}</span>
                 </div>
               </div>
-              <div className="flex-1 space-y-2">
+              <div className={`flex-1 space-y-2 rounded-lg p-1 transition-colors ${isOver ? 'bg-zinc-800/40' : ''}`}>
                 {stageProjects.map(p => {
                   const client = clients.find(cl => cl.id === p.clientId);
                   const days = daysUntil(p.deadline);
                   const urgent = days <= 3 && days >= 0 && p.stage !== 'invoicing';
                   const overdue = days < 0 && p.stage !== 'invoicing';
                   return (
-                    <button key={p.id} onClick={() => onSelectProject(p)} className="w-full text-left bg-zinc-900/80 border border-zinc-800 rounded-lg p-3 hover:border-zinc-600 transition-all group">
-                      <div className="text-xs text-zinc-500 font-body mb-1 truncate">{client?.company}</div>
-                      <div className="text-sm text-zinc-100 font-medium mb-3 leading-snug">{p.title}</div>
-                      <div className="flex items-center justify-between text-xs">
-                        <div className={`flex items-center gap-1 font-mono ${overdue ? 'text-rose-400' : urgent ? 'text-amber-400' : 'text-zinc-500'}`}>
-                          <Clock className="w-3 h-3" />
-                          {fmtDate(p.deadline)}
+                    <div
+                      key={p.id}
+                      draggable
+                      onDragStart={() => setDragId(p.id)}
+                      onDragEnd={() => { setDragId(null); setDragOver(null); }}
+                      className={`bg-zinc-900/80 border border-zinc-800 rounded-lg p-3 hover:border-zinc-600 transition-all group cursor-grab active:cursor-grabbing ${dragId === p.id ? 'opacity-40' : ''}`}
+                    >
+                      <button onClick={() => onSelectProject(p)} className="w-full text-left">
+                        <div className="text-xs text-zinc-500 font-body mb-1 truncate">{client?.company}</div>
+                        <div className="text-sm text-zinc-100 font-medium mb-3 leading-snug">{p.title}</div>
+                        <div className="flex items-center justify-between text-xs">
+                          <div className={`flex items-center gap-1 font-mono ${overdue ? 'text-rose-400' : urgent ? 'text-amber-400' : 'text-zinc-500'}`}>
+                            <Clock className="w-3 h-3" />
+                            {fmtDate(p.deadline)}
+                          </div>
+                          <div className="font-mono text-zinc-400">{eur(p.budget)}</div>
                         </div>
-                        <div className="font-mono text-zinc-400">{eur(p.budget)}</div>
-                      </div>
-                      {p.revisions > 0 && (
-                        <div className="mt-2 text-xs text-violet-400 font-mono">⟲ {p.revisions} révision{p.revisions > 1 ? 's' : ''}</div>
-                      )}
-                    </button>
+                        {p.revisions > 0 && (
+                          <div className="mt-2 text-xs text-violet-400 font-mono">⟲ {p.revisions} révision{p.revisions > 1 ? 's' : ''}</div>
+                        )}
+                      </button>
+                    </div>
                   );
                 })}
                 {stageProjects.length === 0 && (
-                  <div className="text-xs text-zinc-600 text-center py-6 font-body italic">Vide</div>
+                  <div className="text-xs text-zinc-600 text-center py-6 font-body italic">{searchQuery ? 'Aucun résultat' : 'Vide'}</div>
                 )}
               </div>
             </div>
           );
         })}
       </div>
+      <div className="text-xs text-zinc-600 font-body italic">💡 Glisser-déposer pour changer l'étape.</div>
     </div>
   );
 };
@@ -497,9 +600,35 @@ const CalendarView = ({ projects, clients, invoices, onSelectProject }) => {
 };
 
 // ============ INVOICES VIEW ============
-const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoice }) => {
+const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoice, onDeleteInvoice, searchQuery, disableNew }) => {
   const [filter, setFilter] = useState('all');
-  const filtered = invoices.filter(i => filter === 'all' || i.status === filter).sort((a, b) => new Date(b.issueDate) - new Date(a.issueDate));
+  const filtered = invoices
+    .filter(i => filter === 'all' || i.status === filter)
+    .filter(i => {
+      const client = clients.find(c => c.id === i.clientId);
+      const project = projects.find(p => p.id === i.projectId);
+      return matchesQuery(searchQuery, i.number, client?.company, client?.name, project?.title);
+    })
+    .sort((a, b) => new Date(b.issueDate) - new Date(a.issueDate));
+
+  const exportCSV = () => {
+    const rows = [
+      ['N°', 'Client', 'Projet', 'Émise', 'Échéance', 'Montant', 'Statut', 'Payée le']
+    ];
+    invoices.forEach(inv => {
+      const client = clients.find(c => c.id === inv.clientId);
+      const project = projects.find(p => p.id === inv.projectId);
+      rows.push([inv.number, client?.company || '', project?.title || '', inv.issueDate, inv.dueDate, inv.amount, inv.status, inv.paidDate || '']);
+    });
+    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `factures-jesse-${today.toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   const totalInvoiced = invoices.reduce((s, i) => s + i.amount, 0);
   const totalPaid = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.amount, 0);
@@ -513,9 +642,14 @@ const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoi
           <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-2">Facturation</div>
           <h1 className="font-display text-4xl text-zinc-100 tracking-tight">Factures</h1>
         </div>
-        <button onClick={onNewInvoice} className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium text-sm px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
-          <Plus className="w-4 h-4" /> Nouvelle facture
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={exportCSV} disabled={invoices.length === 0} className="text-sm border border-zinc-800 text-zinc-300 hover:text-zinc-100 hover:border-zinc-600 disabled:opacity-40 disabled:cursor-not-allowed px-3 py-2 rounded-lg flex items-center gap-2 font-body transition-colors">
+            <Download className="w-4 h-4" /> Export CSV
+          </button>
+          <button onClick={onNewInvoice} disabled={disableNew} title={disableNew ? 'Créez d\'abord un projet' : ''} className="bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-950 font-medium text-sm px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
+            <Plus className="w-4 h-4" /> Nouvelle facture
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-4 gap-4">
@@ -567,17 +701,22 @@ const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoi
                     </a>
                   </td>
                   <td className="px-4 py-3">
-                    {inv.status !== 'paid' && (
-                      <button onClick={() => onUpdateInvoice(inv.id, { status: 'paid', paidDate: today.toISOString().slice(0, 10) })} className="text-xs text-emerald-400 hover:text-emerald-300 font-medium font-body whitespace-nowrap">
-                        Marquer payée
+                    <div className="flex items-center gap-2 justify-end">
+                      {inv.status !== 'paid' && (
+                        <button onClick={() => onUpdateInvoice(inv.id, { status: 'paid', paidDate: today.toISOString().slice(0, 10) })} className="text-xs text-emerald-400 hover:text-emerald-300 font-medium font-body whitespace-nowrap">
+                          Marquer payée
+                        </button>
+                      )}
+                      <button onClick={() => onDeleteInvoice(inv)} className="text-zinc-500 hover:text-rose-400 transition-colors" title="Supprimer">
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
-                    )}
+                    </div>
                   </td>
                 </tr>
               );
             })}
             {filtered.length === 0 && (
-              <tr><td colSpan="9" className="px-4 py-12 text-center text-zinc-500 text-sm">Aucune facture.</td></tr>
+              <tr><td colSpan="9" className="px-4 py-12 text-center text-zinc-500 text-sm">{searchQuery ? 'Aucune facture ne correspond à la recherche.' : 'Aucune facture.'}</td></tr>
             )}
           </tbody>
         </table>
@@ -591,70 +730,87 @@ const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoi
 };
 
 // ============ CLIENTS VIEW ============
-const ClientsView = ({ clients, projects, invoices, onNewClient }) => (
-  <div className="space-y-6 animate-in">
-    <div className="flex items-end justify-between">
-      <div>
-        <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-2">Clients</div>
-        <h1 className="font-display text-4xl text-zinc-100 tracking-tight">Carnet</h1>
+const ClientsView = ({ clients, projects, invoices, onNewClient, onSelectClient, searchQuery }) => {
+  const filtered = clients.filter(c => matchesQuery(searchQuery, c.company, c.name, c.email, c.phone));
+  return (
+    <div className="space-y-6 animate-in">
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-2">Clients</div>
+          <h1 className="font-display text-4xl text-zinc-100 tracking-tight">Carnet</h1>
+        </div>
+        <button onClick={onNewClient} className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium text-sm px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
+          <Plus className="w-4 h-4" /> Nouveau client
+        </button>
       </div>
-      <button onClick={onNewClient} className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium text-sm px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
-        <Plus className="w-4 h-4" /> Nouveau client
-      </button>
-    </div>
 
-    <div className="grid grid-cols-3 gap-4">
-      {clients.map(c => {
-        const clientProjects = projects.filter(p => p.clientId === c.id);
-        const clientInvoices = invoices.filter(i => i.clientId === c.id);
-        const totalRevenue = clientInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.amount, 0);
-        const pending = clientInvoices.filter(i => i.status !== 'paid').reduce((s, i) => s + i.amount, 0);
-        return (
-          <div key={c.id} className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5 hover:border-zinc-700 transition-colors">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <div className="font-display text-xl text-zinc-100">{c.company}</div>
-                <div className="text-sm text-zinc-400 font-body">{c.name}</div>
+      {filtered.length === 0 && (
+        <div className="bg-zinc-900/40 border border-zinc-800/80 border-dashed rounded-xl p-12 text-center">
+          <Inbox className="w-8 h-8 text-zinc-700 mx-auto mb-3" />
+          <div className="text-sm text-zinc-500 font-body">{searchQuery ? 'Aucun client ne correspond à la recherche.' : 'Aucun client. Commencez par en créer un.'}</div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-3 gap-4">
+        {filtered.map(c => {
+          const clientProjects = projects.filter(p => p.clientId === c.id);
+          const clientInvoices = invoices.filter(i => i.clientId === c.id);
+          const totalRevenue = clientInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.amount, 0);
+          const pending = clientInvoices.filter(i => i.status !== 'paid').reduce((s, i) => s + i.amount, 0);
+          return (
+            <button key={c.id} onClick={() => onSelectClient(c)} className="text-left bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5 hover:border-zinc-600 transition-colors">
+              <div className="flex items-start justify-between mb-4">
+                <div className="min-w-0 flex-1">
+                  <div className="font-display text-xl text-zinc-100 truncate">{c.company}</div>
+                  <div className="text-sm text-zinc-400 font-body truncate">{c.name}</div>
+                </div>
+                <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center font-display text-amber-400 flex-shrink-0">
+                  {c.company.charAt(0).toUpperCase()}
+                </div>
               </div>
-              <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center font-display text-amber-400">
-                {c.company.charAt(0)}
+              <div className="space-y-1 text-xs text-zinc-500 font-mono mb-4">
+                <div className="truncate">{c.email || '—'}</div>
+                <div>{c.phone || '—'}</div>
               </div>
-            </div>
-            <div className="space-y-1 text-xs text-zinc-500 font-mono mb-4">
-              <div>{c.email}</div>
-              <div>{c.phone}</div>
-            </div>
-            <div className="grid grid-cols-3 gap-2 pt-4 border-t border-zinc-800">
-              <div>
-                <div className="text-xs text-zinc-500 font-mono">Projets</div>
-                <div className="font-display text-lg text-zinc-100">{clientProjects.length}</div>
+              <div className="grid grid-cols-3 gap-2 pt-4 border-t border-zinc-800">
+                <div>
+                  <div className="text-xs text-zinc-500 font-mono">Projets</div>
+                  <div className="font-display text-lg text-zinc-100">{clientProjects.length}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-zinc-500 font-mono">Encaissé</div>
+                  <div className="font-display text-lg text-emerald-400">{eur(totalRevenue)}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-zinc-500 font-mono">En attente</div>
+                  <div className="font-display text-lg text-amber-400">{eur(pending)}</div>
+                </div>
               </div>
-              <div>
-                <div className="text-xs text-zinc-500 font-mono">Encaissé</div>
-                <div className="font-display text-lg text-emerald-400">{eur(totalRevenue)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-zinc-500 font-mono">En attente</div>
-                <div className="font-display text-lg text-amber-400">{eur(pending)}</div>
-              </div>
-            </div>
-          </div>
-        );
-      })}
+            </button>
+          );
+        })}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 // ============ PROJECT DETAIL MODAL ============
-const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete }) => {
+const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete, onUpdateInvoice }) => {
   const [editing, setEditing] = useState(false);
   const [data, setData] = useState(project);
+  const [confirmDel, setConfirmDel] = useState(false);
+  useEscape(true, onClose);
+  useEffect(() => { setData(project); setEditing(false); }, [project?.id]);
   if (!project) return null;
   const client = clients.find(c => c.id === project.clientId);
   const projectInvoices = invoices.filter(i => i.projectId === project.id);
   const stageIdx = STAGES.findIndex(s => s.id === project.stage);
 
-  const handleSave = () => { onUpdate(data); setEditing(false); };
+  const handleSave = () => {
+    if (!data.title.trim()) return;
+    onUpdate(data);
+    setEditing(false);
+  };
   const advanceStage = () => { if (stageIdx < STAGES.length - 1) onUpdate({ ...project, stage: STAGES[stageIdx + 1].id }); };
   const previousStage = () => { if (stageIdx > 0) onUpdate({ ...project, stage: STAGES[stageIdx - 1].id }); };
 
@@ -781,13 +937,18 @@ const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete
             {projectInvoices.length === 0 && <div className="text-sm text-zinc-600 italic font-body">Aucune facture émise.</div>}
             {projectInvoices.map(inv => (
               <div key={inv.id} className="flex items-center justify-between p-3 bg-zinc-900/60 border border-zinc-800 rounded-lg">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 min-w-0">
                   <span className="font-mono text-xs text-zinc-400">{inv.number}</span>
                   <StatusPill status={inv.status} />
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-xs text-zinc-500 font-mono">Échéance {fmtDate(inv.dueDate)}</span>
+                  <span className="text-xs text-zinc-500 font-mono">{inv.status === 'paid' ? `Payée ${fmtDate(inv.paidDate)}` : `Échéance ${fmtDate(inv.dueDate)}`}</span>
                   <span className="font-mono text-sm text-zinc-100">{eur(inv.amount)}</span>
+                  {inv.status !== 'paid' && (
+                    <button onClick={() => onUpdateInvoice(inv.id, { status: 'paid', paidDate: today.toISOString().slice(0, 10) })} className="text-xs text-emerald-400 hover:text-emerald-300 font-medium font-body whitespace-nowrap inline-flex items-center gap-1">
+                      <Check className="w-3 h-3" /> Marquer payée
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -795,18 +956,28 @@ const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete
         </div>
 
         <div className="p-5 border-t border-zinc-800 flex justify-between items-center">
-          <button onClick={() => { if (confirm(`Supprimer "${project.title}" ?`)) { onDelete(project.id); onClose(); } }} className="text-sm text-rose-400 hover:text-rose-300 flex items-center gap-1 font-body">
+          <button onClick={() => setConfirmDel(true)} className="text-sm text-rose-400 hover:text-rose-300 flex items-center gap-1 font-body">
             <Trash2 className="w-4 h-4" /> Supprimer
           </button>
           <button onClick={onClose} className="text-sm text-zinc-400 hover:text-zinc-100 px-4 py-2 font-body">Fermer</button>
         </div>
       </div>
+      <ConfirmModal
+        open={confirmDel}
+        title={`Supprimer « ${project.title} » ?`}
+        message={projectInvoices.length > 0 ? `Ce projet a ${projectInvoices.length} facture${projectInvoices.length > 1 ? 's' : ''} liée${projectInvoices.length > 1 ? 's' : ''} qui seront aussi supprimées.` : 'Cette action est irréversible.'}
+        confirmLabel="Supprimer"
+        danger
+        onCancel={() => setConfirmDel(false)}
+        onConfirm={() => { setConfirmDel(false); onDelete(project.id); onClose(); }}
+      />
     </div>
   );
 };
 
 // ============ NEW PROJECT MODAL ============
-const NewProjectModal = ({ clients, onClose, onCreate }) => {
+const NewProjectModal = ({ clients, onClose, onCreate, onCreateClient }) => {
+  useEscape(true, onClose);
   const [data, setData] = useState({
     clientId: clients[0]?.id || '',
     title: '',
@@ -816,9 +987,14 @@ const NewProjectModal = ({ clients, onClose, onCreate }) => {
     budget: 5000,
     notes: ''
   });
+  const toast = useToast();
+  const valid = data.title.trim() && data.clientId && data.deadline >= data.startDate && data.budget >= 0;
 
   const submit = () => {
-    if (!data.title || !data.clientId) return;
+    if (!valid) {
+      toast?.('Vérifiez les champs (titre, client, dates)', 'error');
+      return;
+    }
     onCreate({
       id: 'p' + Date.now(),
       ...data,
@@ -830,6 +1006,26 @@ const NewProjectModal = ({ clients, onClose, onCreate }) => {
     });
     onClose();
   };
+
+  if (clients.length === 0) {
+    return (
+      <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
+        <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+          <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+            <h2 className="font-display text-2xl text-zinc-100">Aucun client</h2>
+            <button onClick={onClose} className="w-9 h-9 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 flex items-center justify-center"><X className="w-4 h-4" /></button>
+          </div>
+          <div className="p-5 space-y-3">
+            <p className="text-sm text-zinc-400 font-body">Vous devez créer un client avant de pouvoir lancer un projet.</p>
+          </div>
+          <div className="p-5 border-t border-zinc-800 flex justify-end gap-2">
+            <button onClick={onClose} className="text-sm px-4 py-2 text-zinc-400 hover:text-zinc-100 font-body">Annuler</button>
+            <button onClick={() => { onClose(); onCreateClient(); }} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium rounded-lg">Créer un client</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
@@ -878,7 +1074,7 @@ const NewProjectModal = ({ clients, onClose, onCreate }) => {
         </div>
         <div className="p-5 border-t border-zinc-800 flex justify-end gap-2">
           <button onClick={onClose} className="text-sm px-4 py-2 text-zinc-400 hover:text-zinc-100 font-body">Annuler</button>
-          <button onClick={submit} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium rounded-lg">Créer le projet</button>
+          <button onClick={submit} disabled={!valid} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-950 font-medium rounded-lg">Créer le projet</button>
         </div>
       </div>
     </div>
@@ -887,9 +1083,15 @@ const NewProjectModal = ({ clients, onClose, onCreate }) => {
 
 // ============ NEW CLIENT MODAL ============
 const NewClientModal = ({ onClose, onCreate }) => {
+  useEscape(true, onClose);
   const [data, setData] = useState({ name: '', company: '', email: '', phone: '' });
+  const toast = useToast();
+  const valid = data.company.trim() && data.name.trim();
   const submit = () => {
-    if (!data.company || !data.name) return;
+    if (!valid) {
+      toast?.('Société et contact sont requis', 'error');
+      return;
+    }
     onCreate({ id: 'c' + Date.now(), ...data, createdAt: today.toISOString().slice(0, 10) });
     onClose();
   };
@@ -920,26 +1122,157 @@ const NewClientModal = ({ onClose, onCreate }) => {
         </div>
         <div className="p-5 border-t border-zinc-800 flex justify-end gap-2">
           <button onClick={onClose} className="text-sm px-4 py-2 text-zinc-400 hover:text-zinc-100 font-body">Annuler</button>
-          <button onClick={submit} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium rounded-lg">Créer</button>
+          <button onClick={submit} disabled={!valid} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-950 font-medium rounded-lg">Créer</button>
         </div>
       </div>
     </div>
   );
 };
 
+// ============ CLIENT DETAIL MODAL ============
+const ClientDetail = ({ client, projects, invoices, onClose, onUpdate, onDelete, onSelectProject }) => {
+  const [editing, setEditing] = useState(false);
+  const [data, setData] = useState(client);
+  const [confirmDel, setConfirmDel] = useState(false);
+  useEscape(true, onClose);
+  useEffect(() => { setData(client); }, [client]);
+  if (!client) return null;
+
+  const clientProjects = projects.filter(p => p.clientId === client.id);
+  const clientInvoices = invoices.filter(i => i.clientId === client.id);
+  const totalRevenue = clientInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.amount, 0);
+  const pending = clientInvoices.filter(i => i.status !== 'paid').reduce((s, i) => s + i.amount, 0);
+
+  const save = () => {
+    if (!data.company.trim() || !data.name.trim()) return;
+    onUpdate(data);
+    setEditing(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
+      <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto scrollbar-thin" onClick={e => e.stopPropagation()}>
+        <div className="sticky top-0 bg-zinc-950 border-b border-zinc-800 p-5 flex items-start justify-between z-10">
+          <div className="flex items-center gap-4 min-w-0 flex-1">
+            <div className="w-12 h-12 rounded-lg bg-zinc-800 flex items-center justify-center font-display text-2xl text-amber-400 flex-shrink-0">
+              {client.company.charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              {editing ? (
+                <input value={data.company} onChange={e => setData({ ...data, company: e.target.value })} className="font-display text-2xl text-zinc-100 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 w-full" />
+              ) : (
+                <h2 className="font-display text-2xl text-zinc-100 truncate">{client.company}</h2>
+              )}
+              {editing ? (
+                <input value={data.name} onChange={e => setData({ ...data, name: e.target.value })} className="text-sm text-zinc-400 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 w-full mt-1 font-body" />
+              ) : (
+                <div className="text-sm text-zinc-400 font-body truncate">{client.name}</div>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {!editing && <button onClick={() => setEditing(true)} className="w-9 h-9 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center"><Edit3 className="w-4 h-4" /></button>}
+            {editing && <button onClick={save} className="px-3 h-9 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-sm font-medium">Sauvegarder</button>}
+            <button onClick={onClose} className="w-9 h-9 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center"><X className="w-4 h-4" /></button>
+          </div>
+        </div>
+
+        <div className="p-5 grid grid-cols-2 gap-4">
+          <div className="space-y-3">
+            <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono">Contact</div>
+            <div className="flex items-center gap-2 text-sm">
+              <Mail className="w-4 h-4 text-zinc-500 flex-shrink-0" />
+              {editing ? (
+                <input type="email" value={data.email} onChange={e => setData({ ...data, email: e.target.value })} className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm font-mono text-zinc-200 flex-1" />
+              ) : (
+                <a href={`mailto:${client.email}`} className="font-mono text-zinc-300 hover:text-amber-400 truncate">{client.email || '—'}</a>
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <Phone className="w-4 h-4 text-zinc-500 flex-shrink-0" />
+              {editing ? (
+                <input value={data.phone} onChange={e => setData({ ...data, phone: e.target.value })} className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm font-mono text-zinc-200 flex-1" />
+              ) : (
+                <a href={`tel:${client.phone}`} className="font-mono text-zinc-300 hover:text-amber-400">{client.phone || '—'}</a>
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <Building2 className="w-4 h-4 text-zinc-500 flex-shrink-0" />
+              <span className="font-mono text-zinc-500 text-xs">Client depuis {fmtDateLong(client.createdAt)}</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3">
+              <div className="text-xs text-zinc-500 font-mono">Projets</div>
+              <div className="font-display text-2xl text-zinc-100">{clientProjects.length}</div>
+            </div>
+            <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-3">
+              <div className="text-xs text-emerald-400/70 font-mono">Encaissé</div>
+              <div className="font-display text-2xl text-emerald-300">{eur(totalRevenue)}</div>
+            </div>
+            <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3">
+              <div className="text-xs text-amber-400/70 font-mono">En attente</div>
+              <div className="font-display text-2xl text-amber-300">{eur(pending)}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-5 border-t border-zinc-800">
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-3">Projets</div>
+          <div className="space-y-2">
+            {clientProjects.length === 0 && <div className="text-sm text-zinc-600 italic font-body">Aucun projet pour ce client.</div>}
+            {clientProjects.map(p => (
+              <button key={p.id} onClick={() => { onClose(); onSelectProject(p); }} className="w-full flex items-center gap-3 p-3 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 rounded-lg text-left transition-colors">
+                <StagePill stage={p.stage} />
+                <span className="text-sm text-zinc-200 flex-1 truncate">{p.title}</span>
+                <span className="font-mono text-xs text-zinc-500">{eur(p.budget)}</span>
+                <ChevronRight className="w-4 h-4 text-zinc-600" />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="p-5 border-t border-zinc-800 flex justify-between items-center">
+          <button onClick={() => setConfirmDel(true)} className="text-sm text-rose-400 hover:text-rose-300 flex items-center gap-1 font-body">
+            <Trash2 className="w-4 h-4" /> Supprimer
+          </button>
+          <button onClick={onClose} className="text-sm text-zinc-400 hover:text-zinc-100 px-4 py-2 font-body">Fermer</button>
+        </div>
+      </div>
+      <ConfirmModal
+        open={confirmDel}
+        title={`Supprimer ${client.company} ?`}
+        message={clientProjects.length > 0
+          ? `Ce client a ${clientProjects.length} projet${clientProjects.length > 1 ? 's' : ''} et ${clientInvoices.length} facture${clientInvoices.length > 1 ? 's' : ''}. Tout sera supprimé.`
+          : 'Cette action est irréversible.'}
+        confirmLabel="Supprimer"
+        danger
+        onCancel={() => setConfirmDel(false)}
+        onConfirm={() => { setConfirmDel(false); onDelete(client.id); onClose(); }}
+      />
+    </div>
+  );
+};
+
 // ============ NEW INVOICE MODAL ============
 const NewInvoiceModal = ({ projects, clients, invoices, onClose, onCreate }) => {
+  useEscape(true, onClose);
   const [data, setData] = useState({
     projectId: projects[0]?.id || '',
     amount: 1000,
     dueDate: dateOffset(14)
   });
+  const toast = useToast();
 
   const project = projects.find(p => p.id === data.projectId);
   const nextNumber = `JESSE-2026-${String(48 + invoices.length).padStart(4, '0')}`;
+  const valid = project && parseFloat(data.amount) > 0 && data.dueDate;
 
   const submit = () => {
-    if (!project) return;
+    if (!valid) {
+      toast?.('Vérifiez le montant et la date d\'échéance', 'error');
+      return;
+    }
     onCreate({
       id: 'i' + Date.now(),
       number: nextNumber,
@@ -970,6 +1303,7 @@ const NewInvoiceModal = ({ projects, clients, invoices, onClose, onCreate }) => 
           <div>
             <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Projet</label>
             <select value={data.projectId} onChange={e => setData({ ...data, projectId: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-body">
+              {projects.length === 0 && <option value="">Aucun projet — créez-en un d'abord</option>}
               {projects.map(p => {
                 const c = clients.find(cl => cl.id === p.clientId);
                 return <option key={p.id} value={p.id}>{c?.company} — {p.title}</option>;
@@ -989,8 +1323,98 @@ const NewInvoiceModal = ({ projects, clients, invoices, onClose, onCreate }) => 
         </div>
         <div className="p-5 border-t border-zinc-800 flex justify-end gap-2">
           <button onClick={onClose} className="text-sm px-4 py-2 text-zinc-400 hover:text-zinc-100 font-body">Annuler</button>
-          <button onClick={submit} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium rounded-lg">Émettre</button>
+          <button onClick={submit} disabled={!valid} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-950 font-medium rounded-lg">Émettre</button>
         </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ NOTIFICATIONS DROPDOWN ============
+const NotificationsPanel = ({ projects, invoices, clients, onSelectProject, onNavigate, onClose }) => {
+  const ref = useRef(null);
+  useEffect(() => {
+    const onClick = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+    setTimeout(() => document.addEventListener('mousedown', onClick), 0);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [onClose]);
+
+  const overdueInvoices = invoices.filter(i => i.status === 'overdue');
+  const upcomingDeadlines = projects
+    .filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) >= 0 && daysUntil(p.deadline) <= 5)
+    .sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+  const overdueProjects = projects
+    .filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) < 0);
+
+  const total = overdueInvoices.length + upcomingDeadlines.length + overdueProjects.length;
+
+  return (
+    <div ref={ref} className="absolute right-0 top-12 w-96 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl z-30 animate-in overflow-hidden">
+      <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
+        <div>
+          <div className="font-display text-lg text-zinc-100">Notifications</div>
+          <div className="text-xs text-zinc-500 font-mono">{total} alerte{total !== 1 ? 's' : ''}</div>
+        </div>
+      </div>
+      <div className="max-h-96 overflow-y-auto scrollbar-thin">
+        {total === 0 && (
+          <div className="p-8 text-center">
+            <CheckCircle2 className="w-8 h-8 text-emerald-500/60 mx-auto mb-2" />
+            <div className="text-sm text-zinc-400 font-body">Tout est sous contrôle.</div>
+          </div>
+        )}
+        {overdueInvoices.length > 0 && (
+          <div>
+            <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-widest text-rose-400/80 font-mono">Factures en retard</div>
+            {overdueInvoices.map(inv => {
+              const c = clients.find(cl => cl.id === inv.clientId);
+              return (
+                <button key={inv.id} onClick={() => { onClose(); onNavigate('invoices'); }} className="w-full text-left flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-900 transition-colors">
+                  <span className="w-2 h-2 rounded-full bg-rose-400 flex-shrink-0 animate-pulse-slow"></span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-zinc-200 truncate">{c?.company} · {inv.number}</div>
+                    <div className="text-xs text-zinc-500 font-mono">Échue {fmtDate(inv.dueDate)} · {eur(inv.amount)}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {overdueProjects.length > 0 && (
+          <div>
+            <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-widest text-rose-400/80 font-mono">Deadlines dépassées</div>
+            {overdueProjects.map(p => {
+              const c = clients.find(cl => cl.id === p.clientId);
+              return (
+                <button key={p.id} onClick={() => { onClose(); onSelectProject(p); }} className="w-full text-left flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-900 transition-colors">
+                  <span className="w-2 h-2 rounded-full bg-rose-400 flex-shrink-0"></span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-zinc-200 truncate">{p.title}</div>
+                    <div className="text-xs text-zinc-500 font-mono">{c?.company} · J+{Math.abs(daysUntil(p.deadline))}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {upcomingDeadlines.length > 0 && (
+          <div>
+            <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-widest text-amber-400/80 font-mono">Deadlines proches</div>
+            {upcomingDeadlines.map(p => {
+              const c = clients.find(cl => cl.id === p.clientId);
+              const days = daysUntil(p.deadline);
+              return (
+                <button key={p.id} onClick={() => { onClose(); onSelectProject(p); }} className="w-full text-left flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-900 transition-colors">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0"></span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-zinc-200 truncate">{p.title}</div>
+                    <div className="text-xs text-zinc-500 font-mono">{c?.company} · {days === 0 ? "aujourd'hui" : `J-${days}`}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1004,22 +1428,24 @@ function JesseDashboard() {
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedProject, setSelectedProject] = useState(null);
+  const [selectedClient, setSelectedClient] = useState(null);
   const [showNewProject, setShowNewProject] = useState(false);
   const [showNewClient, setShowNewClient] = useState(false);
   const [showNewInvoice, setShowNewInvoice] = useState(false);
+  const [showNotifs, setShowNotifs] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmInvoiceDel, setConfirmInvoiceDel] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const toast = useToast();
 
   useEffect(() => {
     const stored = loadStore();
-    if (stored) {
-      setClients(stored.clients || seedClients);
-      setProjects(stored.projects || seedProjects);
-      setInvoices(stored.invoices || seedInvoices);
-    } else {
-      setClients(seedClients);
-      setProjects(seedProjects);
-      setInvoices(seedInvoices);
-    }
+    const baseClients = stored?.clients || seedClients;
+    const baseProjects = stored?.projects || seedProjects;
+    const baseInvoices = reconcileInvoiceStatus(stored?.invoices || seedInvoices);
+    setClients(baseClients);
+    setProjects(baseProjects);
+    setInvoices(baseInvoices);
     setLoading(false);
     const el = document.getElementById('loading');
     if (el) el.style.display = 'none';
@@ -1030,17 +1456,93 @@ function JesseDashboard() {
   }, [clients, projects, invoices, loading]);
 
   const updateProject = (data) => {
-    setProjects(projects.map(p => p.id === data.id ? data : p));
+    setProjects(prev => prev.map(p => p.id === data.id ? data : p));
     if (selectedProject?.id === data.id) setSelectedProject(data);
+    toast?.('Projet mis à jour');
   };
-  const deleteProject = (id) => setProjects(projects.filter(p => p.id !== id));
-  const createProject = (p) => setProjects([...projects, p]);
-  const createClient = (c) => setClients([...clients, c]);
-  const updateInvoice = (id, patch) => setInvoices(invoices.map(i => i.id === id ? { ...i, ...patch } : i));
+  const deleteProject = (id) => {
+    const p = projects.find(x => x.id === id);
+    setProjects(prev => prev.filter(x => x.id !== id));
+    setInvoices(prev => prev.filter(i => i.projectId !== id));
+    toast?.(`« ${p?.title || 'Projet'} » supprimé`);
+  };
+  const createProject = (p) => {
+    setProjects(prev => [...prev, p]);
+    toast?.('Projet créé');
+  };
+  const createClient = (c) => {
+    setClients(prev => [...prev, c]);
+    toast?.('Client ajouté');
+  };
+  const updateClient = (data) => {
+    setClients(prev => prev.map(c => c.id === data.id ? data : c));
+    if (selectedClient?.id === data.id) setSelectedClient(data);
+    toast?.('Client mis à jour');
+  };
+  const deleteClient = (id) => {
+    const c = clients.find(x => x.id === id);
+    const projIds = projects.filter(p => p.clientId === id).map(p => p.id);
+    setClients(prev => prev.filter(x => x.id !== id));
+    setProjects(prev => prev.filter(p => p.clientId !== id));
+    setInvoices(prev => prev.filter(i => i.clientId !== id && !projIds.includes(i.projectId)));
+    toast?.(`${c?.company || 'Client'} supprimé`);
+  };
+  const updateInvoice = (id, patch) => {
+    setInvoices(prev => prev.map(i => {
+      if (i.id !== id) return i;
+      const updated = { ...i, ...patch };
+      // Sync paidAmount sur le projet quand on passe à payé
+      if (patch.status === 'paid' && i.status !== 'paid') {
+        setProjects(curr => curr.map(p => p.id === i.projectId ? { ...p, paidAmount: Math.min(p.budget, (p.paidAmount || 0) + i.amount) } : p));
+      } else if (patch.status && patch.status !== 'paid' && i.status === 'paid') {
+        setProjects(curr => curr.map(p => p.id === i.projectId ? { ...p, paidAmount: Math.max(0, (p.paidAmount || 0) - i.amount) } : p));
+      }
+      return updated;
+    }));
+    if (patch.status === 'paid') toast?.('Facture marquée payée');
+  };
+  const deleteInvoice = (inv) => {
+    setInvoices(prev => prev.filter(i => i.id !== inv.id));
+    setProjects(prev => prev.map(p => {
+      if (p.id !== inv.projectId) return p;
+      return {
+        ...p,
+        invoicedAmount: Math.max(0, (p.invoicedAmount || 0) - inv.amount),
+        paidAmount: inv.status === 'paid' ? Math.max(0, (p.paidAmount || 0) - inv.amount) : p.paidAmount
+      };
+    }));
+    toast?.('Facture supprimée');
+  };
   const createInvoice = (inv) => {
-    setInvoices([...invoices, inv]);
-    setProjects(projects.map(p => p.id === inv.projectId ? { ...p, invoicedAmount: p.invoicedAmount + inv.amount } : p));
+    setInvoices(prev => [...prev, inv]);
+    setProjects(prev => prev.map(p => p.id === inv.projectId ? { ...p, invoicedAmount: (p.invoicedAmount || 0) + inv.amount } : p));
+    toast?.(`Facture ${inv.number} émise`);
   };
+  const moveStage = (projectId, newStage) => {
+    setProjects(prev => prev.map(p => p.id === projectId ? { ...p, stage: newStage } : p));
+    const p = projects.find(x => x.id === projectId);
+    const meta = STAGES.find(s => s.id === newStage);
+    if (p && p.stage !== newStage) toast?.(`${p.title} → ${meta?.label}`, 'info');
+  };
+  const resetData = () => {
+    setClients(seedClients);
+    setProjects(seedProjects);
+    setInvoices(reconcileInvoiceStatus(seedInvoices));
+    setConfirmReset(false);
+    toast?.('Données restaurées', 'info');
+  };
+
+  // Raccourci clavier global pour la recherche
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        document.getElementById('global-search')?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -1049,6 +1551,11 @@ function JesseDashboard() {
     { id: 'invoices', label: 'Facturation', icon: Receipt },
     { id: 'clients', label: 'Clients', icon: Users }
   ];
+
+  const totalNotifs =
+    invoices.filter(i => i.status === 'overdue').length +
+    projects.filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) < 0).length +
+    projects.filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) >= 0 && daysUntil(p.deadline) <= 5).length;
 
   if (loading) return null;
 
@@ -1081,7 +1588,7 @@ function JesseDashboard() {
             })}
           </nav>
 
-          <div className="p-3 border-t border-zinc-800/80">
+          <div className="p-3 border-t border-zinc-800/80 space-y-2">
             <div className="bg-zinc-900/60 rounded-lg p-3">
               <div className="flex items-center gap-2 mb-2">
                 <Sparkles className="w-3.5 h-3.5 text-amber-400" />
@@ -1089,22 +1596,42 @@ function JesseDashboard() {
               </div>
               <div className="text-[11px] text-zinc-500 font-body leading-relaxed">Mock activé · webhook prêt à brancher</div>
             </div>
+            <button onClick={() => setConfirmReset(true)} className="w-full flex items-center gap-2 text-[11px] text-zinc-600 hover:text-zinc-300 px-2 py-1.5 transition-colors font-mono">
+              <RotateCcw className="w-3 h-3" /> Restaurer données démo
+            </button>
           </div>
         </aside>
 
         <main className="flex-1 flex flex-col min-w-0">
-          <header className="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-10">
+          <header className="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-20">
             <div className="flex items-center gap-4 px-6 py-3">
               <div className="flex-1 max-w-md relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
-                <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Rechercher un projet, un client…" className="w-full bg-zinc-900/60 border border-zinc-800 rounded-lg pl-10 pr-3 py-2 text-sm text-zinc-200 font-body focus:border-zinc-600 focus:outline-none" />
+                <input id="global-search" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Rechercher  ⌘K" className="w-full bg-zinc-900/60 border border-zinc-800 rounded-lg pl-10 pr-3 py-2 text-sm text-zinc-200 font-body focus:border-zinc-600 focus:outline-none" />
+                {searchQuery && (
+                  <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
               <div className="text-xs text-zinc-500 font-mono">{today.toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: 'long' })}</div>
-              <button className="w-9 h-9 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center relative">
-                <Bell className="w-4 h-4" />
-                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-              </button>
-              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center text-xs font-medium text-zinc-200">RB</div>
+              <div className="relative">
+                <button onClick={() => setShowNotifs(v => !v)} className="w-9 h-9 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center relative transition-colors">
+                  <Bell className="w-4 h-4" />
+                  {totalNotifs > 0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-400 text-zinc-950 text-[10px] font-bold flex items-center justify-center">{totalNotifs}</span>}
+                </button>
+                {showNotifs && (
+                  <NotificationsPanel
+                    projects={projects}
+                    invoices={invoices}
+                    clients={clients}
+                    onSelectProject={setSelectedProject}
+                    onNavigate={setActiveView}
+                    onClose={() => setShowNotifs(false)}
+                  />
+                )}
+              </div>
+              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-xs font-bold text-zinc-950">JE</div>
             </div>
           </header>
 
@@ -1113,30 +1640,54 @@ function JesseDashboard() {
               <DashboardView projects={projects} invoices={invoices} clients={clients} onSelectProject={setSelectedProject} onNewProject={() => setShowNewProject(true)} />
             )}
             {activeView === 'projects' && (
-              <ProjectsView projects={projects} clients={clients} onSelectProject={setSelectedProject} onNewProject={() => setShowNewProject(true)} />
+              <ProjectsView projects={projects} clients={clients} onSelectProject={setSelectedProject} onNewProject={() => setShowNewProject(true)} searchQuery={searchQuery} onMoveStage={moveStage} />
             )}
             {activeView === 'calendar' && (
               <CalendarView projects={projects} clients={clients} invoices={invoices} onSelectProject={setSelectedProject} />
             )}
             {activeView === 'invoices' && (
-              <InvoicesView invoices={invoices} clients={clients} projects={projects} onUpdateInvoice={updateInvoice} onNewInvoice={() => setShowNewInvoice(true)} />
+              <InvoicesView invoices={invoices} clients={clients} projects={projects} onUpdateInvoice={updateInvoice} onNewInvoice={() => setShowNewInvoice(true)} onDeleteInvoice={(inv) => setConfirmInvoiceDel(inv)} searchQuery={searchQuery} disableNew={projects.length === 0} />
             )}
             {activeView === 'clients' && (
-              <ClientsView clients={clients} projects={projects} invoices={invoices} onNewClient={() => setShowNewClient(true)} />
+              <ClientsView clients={clients} projects={projects} invoices={invoices} onNewClient={() => setShowNewClient(true)} onSelectClient={setSelectedClient} searchQuery={searchQuery} />
             )}
           </div>
         </main>
       </div>
 
-      {selectedProject && <ProjectDetail project={selectedProject} clients={clients} invoices={invoices} onClose={() => setSelectedProject(null)} onUpdate={updateProject} onDelete={deleteProject} />}
-      {showNewProject && <NewProjectModal clients={clients} onClose={() => setShowNewProject(false)} onCreate={createProject} />}
+      {selectedProject && <ProjectDetail project={selectedProject} clients={clients} invoices={invoices} onClose={() => setSelectedProject(null)} onUpdate={updateProject} onDelete={deleteProject} onUpdateInvoice={updateInvoice} />}
+      {selectedClient && <ClientDetail client={selectedClient} projects={projects} invoices={invoices} onClose={() => setSelectedClient(null)} onUpdate={updateClient} onDelete={deleteClient} onSelectProject={setSelectedProject} />}
+      {showNewProject && <NewProjectModal clients={clients} onClose={() => setShowNewProject(false)} onCreate={createProject} onCreateClient={() => setShowNewClient(true)} />}
       {showNewClient && <NewClientModal onClose={() => setShowNewClient(false)} onCreate={createClient} />}
       {showNewInvoice && <NewInvoiceModal projects={projects} clients={clients} invoices={invoices} onClose={() => setShowNewInvoice(false)} onCreate={createInvoice} />}
+
+      <ConfirmModal
+        open={confirmReset}
+        title="Restaurer les données de démo ?"
+        message="Toutes vos modifications locales seront écrasées par le jeu de données initial."
+        confirmLabel="Restaurer"
+        danger
+        onCancel={() => setConfirmReset(false)}
+        onConfirm={resetData}
+      />
+      <ConfirmModal
+        open={!!confirmInvoiceDel}
+        title={`Supprimer la facture ${confirmInvoiceDel?.number} ?`}
+        message="Cette action est irréversible. Le montant sera retiré du facturé du projet."
+        confirmLabel="Supprimer"
+        danger
+        onCancel={() => setConfirmInvoiceDel(null)}
+        onConfirm={() => { deleteInvoice(confirmInvoiceDel); setConfirmInvoiceDel(null); }}
+      />
     </div>
   );
 }
 
-createRoot(document.getElementById('root')).render(<JesseDashboard />);
+createRoot(document.getElementById('root')).render(
+  <ToastProvider>
+    <JesseDashboard />
+  </ToastProvider>
+);
 </script>
 </body>
 </html>
