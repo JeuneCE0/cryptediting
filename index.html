@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jesse — Studio OS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=DM+Sans:opsz,wght@9..40,300..900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #09090b; color: #e4e4e7; font-family: 'DM Sans', system-ui, sans-serif; }
+  .font-display { font-family: 'Fraunces', 'Georgia', serif; font-optical-sizing: auto; }
+  .font-body { font-family: 'DM Sans', system-ui, sans-serif; }
+  .font-mono { font-family: 'JetBrains Mono', monospace; }
+  .grain { background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,0.015) 1px, transparent 0); background-size: 4px 4px; }
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  .animate-in { animation: fadeIn 0.3s ease-out; }
+  @keyframes pulse-glow { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .animate-pulse-slow { animation: pulse-glow 2.5s ease-in-out infinite; }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #09090b; color: #71717a; z-index: 100; }
+</style>
+</head>
+<body class="grain">
+
+<div id="loading">
+  <div style="text-align: center;">
+    <div style="font-family: Fraunces, serif; font-size: 32px; color: #fbbf24; margin-bottom: 8px;">Jesse</div>
+    <div style="font-family: JetBrains Mono, monospace; font-size: 11px; letter-spacing: 0.2em; opacity: 0.7;">CHARGEMENT…</div>
+  </div>
+</div>
+
+<div id="root"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "lucide-react": "https://esm.sh/lucide-react@0.460.0?deps=react@18.3.1",
+    "recharts": "https://esm.sh/recharts@2.13.0?deps=react@18.3.1"
+  }
+}
+</script>
+
+<script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+
+<script type="text/babel" data-type="module" data-presets="react">
+import React, { useState, useEffect, useMemo } from 'react';
+import { createRoot } from 'react-dom/client';
+import {
+  LayoutDashboard, FolderKanban, CalendarDays, Receipt, Users, Plus,
+  Search, Bell, ChevronRight, ChevronLeft, X, Edit3,
+  Trash2, Clock, FileVideo, CheckCircle2, AlertCircle,
+  Film, Sparkles, TrendingUp, ExternalLink
+} from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from 'recharts';
+
+// ============ CONFIG ============
+const STAGES = [
+  { id: 'onboarding', label: 'Onboarding', color: 'sky' },
+  { id: 'production', label: 'Production', color: 'amber' },
+  { id: 'review', label: 'Validation client', color: 'violet' },
+  { id: 'validated', label: 'Validé', color: 'emerald' },
+  { id: 'invoicing', label: 'Facturation', color: 'rose' }
+];
+
+const STAGE_COLORS = {
+  sky: { bg: 'bg-sky-500/10', text: 'text-sky-300', border: 'border-sky-500/30', dot: 'bg-sky-400' },
+  amber: { bg: 'bg-amber-500/10', text: 'text-amber-300', border: 'border-amber-500/30', dot: 'bg-amber-400' },
+  violet: { bg: 'bg-violet-500/10', text: 'text-violet-300', border: 'border-violet-500/30', dot: 'bg-violet-400' },
+  emerald: { bg: 'bg-emerald-500/10', text: 'text-emerald-300', border: 'border-emerald-500/30', dot: 'bg-emerald-400' },
+  rose: { bg: 'bg-rose-500/10', text: 'text-rose-300', border: 'border-rose-500/30', dot: 'bg-rose-400' }
+};
+
+const PROJECT_TYPES = ['Publicité', 'Corporate', 'Social Media', 'Clip musical', 'Documentaire', 'Événement', 'Mariage', 'Aftermovie'];
+
+// ============ SEED DATA ============
+const today = new Date('2026-04-30');
+const dateOffset = (days) => { const d = new Date(today); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); };
+
+const seedClients = [
+  { id: 'c1', name: 'Léa Maillard', company: 'Maillard & Co', email: 'lea@maillard.fr', phone: '+33 6 12 34 56 78', createdAt: '2026-03-15' },
+  { id: 'c2', name: 'Antoine Roux', company: 'Roux Distribution', email: 'a.roux@rouxdist.com', phone: '+33 6 98 76 54 32', createdAt: '2026-02-08' },
+  { id: 'c3', name: 'Camille Vidal', company: 'Studio Hélios', email: 'camille@helios.io', phone: '+33 7 45 67 89 01', createdAt: '2026-01-22' },
+  { id: 'c4', name: 'Marc Tessier', company: 'Tessier Immobilier', email: 'marc@tessier-immo.fr', phone: '+33 6 22 33 44 55', createdAt: '2026-04-02' },
+  { id: 'c5', name: 'Sofia Almeida', company: 'Almeida Bijoux', email: 'sofia@almeida-bijoux.com', phone: '+33 7 11 22 33 44', createdAt: '2026-03-28' }
+];
+
+const seedProjects = [
+  { id: 'p1', clientId: 'c1', title: 'Campagne printemps 2026', type: 'Publicité', stage: 'production', startDate: dateOffset(-12), deadline: dateOffset(8), budget: 8500, invoicedAmount: 4250, paidAmount: 4250, revisions: 0, notes: 'Tournage terminé. En cours d\'étalonnage.', createdAt: dateOffset(-15) },
+  { id: 'p2', clientId: 'c2', title: 'Film corporate annuel', type: 'Corporate', stage: 'review', startDate: dateOffset(-25), deadline: dateOffset(3), budget: 12000, invoicedAmount: 6000, paidAmount: 6000, revisions: 2, notes: 'Deuxième passe envoyée au client. Attente retours sur le chapitre 3.', createdAt: dateOffset(-30) },
+  { id: 'p3', clientId: 'c3', title: 'Série Reels Q2', type: 'Social Media', stage: 'onboarding', startDate: dateOffset(-2), deadline: dateOffset(21), budget: 4200, invoicedAmount: 2100, paidAmount: 0, revisions: 0, notes: 'Brief reçu, kick-off prévu jeudi.', createdAt: dateOffset(-3) },
+  { id: 'p4', clientId: 'c4', title: 'Visite virtuelle Villa Bel-Air', type: 'Corporate', stage: 'validated', startDate: dateOffset(-40), deadline: dateOffset(-2), budget: 3800, invoicedAmount: 3800, paidAmount: 1900, revisions: 1, notes: 'Livré et validé. Solde à facturer.', createdAt: dateOffset(-45) },
+  { id: 'p5', clientId: 'c5', title: 'Lookbook collection été', type: 'Publicité', stage: 'invoicing', startDate: dateOffset(-55), deadline: dateOffset(-10), budget: 6500, invoicedAmount: 6500, paidAmount: 3250, revisions: 3, notes: 'Solde en attente de paiement.', createdAt: dateOffset(-60) },
+  { id: 'p6', clientId: 'c1', title: 'Aftermovie événement clients', type: 'Aftermovie', stage: 'production', startDate: dateOffset(-7), deadline: dateOffset(14), budget: 3200, invoicedAmount: 1600, paidAmount: 1600, revisions: 0, notes: 'Dérushage en cours.', createdAt: dateOffset(-10) },
+  { id: 'p7', clientId: 'c2', title: 'Spot recrutement', type: 'Corporate', stage: 'onboarding', startDate: dateOffset(0), deadline: dateOffset(28), budget: 5500, invoicedAmount: 0, paidAmount: 0, revisions: 0, notes: 'Devis signé hier.', createdAt: dateOffset(-1) }
+];
+
+const seedInvoices = [
+  { id: 'i1', projectId: 'p1', clientId: 'c1', number: 'JESSE-2026-0042', amount: 4250, status: 'paid', issueDate: dateOffset(-14), dueDate: dateOffset(-7), paidDate: dateOffset(-9), ghlLink: 'https://app.gohighlevel.com/inv/mock-42' },
+  { id: 'i2', projectId: 'p2', clientId: 'c2', number: 'JESSE-2026-0043', amount: 6000, status: 'paid', issueDate: dateOffset(-28), dueDate: dateOffset(-21), paidDate: dateOffset(-22), ghlLink: 'https://app.gohighlevel.com/inv/mock-43' },
+  { id: 'i3', projectId: 'p3', clientId: 'c3', number: 'JESSE-2026-0044', amount: 2100, status: 'pending', issueDate: dateOffset(-2), dueDate: dateOffset(12), paidDate: null, ghlLink: 'https://app.gohighlevel.com/inv/mock-44' },
+  { id: 'i4', projectId: 'p4', clientId: 'c4', number: 'JESSE-2026-0045', amount: 1900, status: 'paid', issueDate: dateOffset(-42), dueDate: dateOffset(-35), paidDate: dateOffset(-38), ghlLink: 'https://app.gohighlevel.com/inv/mock-45' },
+  { id: 'i5', projectId: 'p4', clientId: 'c4', number: 'JESSE-2026-0046', amount: 1900, status: 'pending', issueDate: dateOffset(-1), dueDate: dateOffset(13), paidDate: null, ghlLink: 'https://app.gohighlevel.com/inv/mock-46' },
+  { id: 'i6', projectId: 'p5', clientId: 'c5', number: 'JESSE-2026-0040', amount: 3250, status: 'paid', issueDate: dateOffset(-58), dueDate: dateOffset(-51), paidDate: dateOffset(-55), ghlLink: 'https://app.gohighlevel.com/inv/mock-40' },
+  { id: 'i7', projectId: 'p5', clientId: 'c5', number: 'JESSE-2026-0041', amount: 3250, status: 'overdue', issueDate: dateOffset(-12), dueDate: dateOffset(-5), paidDate: null, ghlLink: 'https://app.gohighlevel.com/inv/mock-41' },
+  { id: 'i8', projectId: 'p6', clientId: 'c1', number: 'JESSE-2026-0047', amount: 1600, status: 'paid', issueDate: dateOffset(-9), dueDate: dateOffset(-2), paidDate: dateOffset(-4), ghlLink: 'https://app.gohighlevel.com/inv/mock-47' }
+];
+
+// ============ HELPERS ============
+const eur = (n) => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(n || 0);
+const fmtDate = (s) => s ? new Date(s).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' }) : '—';
+const fmtDateLong = (s) => s ? new Date(s).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' }) : '—';
+const daysUntil = (d) => Math.ceil((new Date(d) - today) / 86400000);
+const stageMeta = (id) => STAGES.find(s => s.id === id) || STAGES[0];
+
+// ============ STORAGE (localStorage) ============
+const STORAGE_KEY = 'jesse-dashboard-v1';
+const loadStore = () => {
+  try { const r = localStorage.getItem(STORAGE_KEY); return r ? JSON.parse(r) : null; }
+  catch { return null; }
+};
+const saveStore = (data) => {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+  catch (e) { console.error(e); }
+};
+
+// ============ COMPONENTS ============
+const StagePill = ({ stage, size = 'sm' }) => {
+  const meta = stageMeta(stage);
+  const c = STAGE_COLORS[meta.color];
+  const sizing = size === 'sm' ? 'text-xs px-2 py-0.5' : 'text-sm px-3 py-1';
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full font-medium font-body ${c.bg} ${c.text} ${c.border} border ${sizing}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`}></span>
+      {meta.label}
+    </span>
+  );
+};
+
+const StatusPill = ({ status }) => {
+  const map = {
+    paid: { bg: 'bg-emerald-500/10', text: 'text-emerald-300', label: 'Payée', dot: 'bg-emerald-400' },
+    pending: { bg: 'bg-amber-500/10', text: 'text-amber-300', label: 'En attente', dot: 'bg-amber-400' },
+    overdue: { bg: 'bg-rose-500/10', text: 'text-rose-300', label: 'En retard', dot: 'bg-rose-400 animate-pulse-slow' }
+  };
+  const c = map[status] || map.pending;
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full text-xs font-medium px-2 py-0.5 ${c.bg} ${c.text}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`}></span>{c.label}
+    </span>
+  );
+};
+
+const KPICard = ({ label, value, sub, accent = 'amber', icon: Icon }) => (
+  <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5 hover:border-zinc-700 transition-colors">
+    <div className="flex items-start justify-between mb-3">
+      <span className="text-xs uppercase tracking-widest text-zinc-500 font-mono">{label}</span>
+      {Icon && <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${accent === 'amber' ? 'bg-amber-500/10 text-amber-400' : accent === 'emerald' ? 'bg-emerald-500/10 text-emerald-400' : accent === 'rose' ? 'bg-rose-500/10 text-rose-400' : 'bg-sky-500/10 text-sky-400'}`}><Icon className="w-4 h-4" /></div>}
+    </div>
+    <div className="font-display text-3xl text-zinc-100 mb-1 tracking-tight">{value}</div>
+    {sub && <div className="text-xs text-zinc-500 font-body">{sub}</div>}
+  </div>
+);
+
+// ============ DASHBOARD VIEW ============
+const DashboardView = ({ projects, invoices, clients, onSelectProject, onNewProject }) => {
+  const activeProjects = projects.filter(p => p.stage !== 'invoicing' || p.invoicedAmount > p.paidAmount);
+  const totalPaid = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.amount, 0);
+  const totalPending = invoices.filter(i => i.status === 'pending').reduce((s, i) => s + i.amount, 0);
+  const totalOverdue = invoices.filter(i => i.status === 'overdue').reduce((s, i) => s + i.amount, 0);
+
+  const pipeline = STAGES.map(s => ({
+    ...s,
+    count: projects.filter(p => p.stage === s.id).length,
+    value: projects.filter(p => p.stage === s.id).reduce((sum, p) => sum + p.budget, 0)
+  }));
+
+  const upcomingDeadlines = [...projects]
+    .filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) >= -3 && daysUntil(p.deadline) <= 21)
+    .sort((a, b) => new Date(a.deadline) - new Date(b.deadline))
+    .slice(0, 6);
+
+  const chartData = useMemo(() => {
+    const months = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(today); d.setMonth(d.getMonth() - i); d.setDate(1);
+      months.push({
+        label: d.toLocaleDateString('fr-FR', { month: 'short' }),
+        month: d.getMonth(), year: d.getFullYear(),
+        paid: 0
+      });
+    }
+    invoices.forEach(inv => {
+      if (inv.paidDate) {
+        const d = new Date(inv.paidDate);
+        const m = months.find(x => x.month === d.getMonth() && x.year === d.getFullYear());
+        if (m) m.paid += inv.amount;
+      }
+    });
+    return months;
+  }, [invoices]);
+
+  return (
+    <div className="space-y-6 animate-in">
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-2">Tableau de bord — {fmtDateLong(today.toISOString())}</div>
+          <h1 className="font-display text-4xl text-zinc-100 tracking-tight">Bonsoir.</h1>
+        </div>
+        <button onClick={onNewProject} className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium font-body text-sm px-4 py-2.5 rounded-lg flex items-center gap-2 transition-colors">
+          <Plus className="w-4 h-4" /> Nouveau projet
+        </button>
+      </div>
+
+      <div className="grid grid-cols-4 gap-4">
+        <KPICard label="Encaissé · 6 mois" value={eur(totalPaid)} sub={`${invoices.filter(i => i.status === 'paid').length} factures réglées`} accent="emerald" icon={TrendingUp} />
+        <KPICard label="En attente" value={eur(totalPending)} sub={`${invoices.filter(i => i.status === 'pending').length} factures émises`} accent="amber" icon={Clock} />
+        <KPICard label="En retard" value={eur(totalOverdue)} sub={`${invoices.filter(i => i.status === 'overdue').length} à relancer`} accent="rose" icon={AlertCircle} />
+        <KPICard label="Projets actifs" value={activeProjects.length} sub={`${clients.length} clients · ${eur(activeProjects.reduce((s, p) => s + p.budget, 0))} en cours`} accent="sky" icon={FileVideo} />
+      </div>
+
+      <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-display text-xl text-zinc-100">Pipeline</h2>
+          <span className="text-xs text-zinc-500 font-mono">{projects.length} projets</span>
+        </div>
+        <div className="grid grid-cols-5 gap-3">
+          {pipeline.map(s => {
+            const c = STAGE_COLORS[s.color];
+            return (
+              <div key={s.id} className={`${c.bg} ${c.border} border rounded-lg p-4`}>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className={`w-2 h-2 rounded-full ${c.dot}`}></span>
+                  <span className={`text-xs font-medium ${c.text}`}>{s.label}</span>
+                </div>
+                <div className="font-display text-3xl text-zinc-100 leading-none mb-1">{s.count}</div>
+                <div className="text-xs text-zinc-500 font-mono">{eur(s.value)}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4">
+        <div className="col-span-2 bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-display text-xl text-zinc-100">Deadlines à venir</h2>
+            <span className="text-xs text-zinc-500 font-mono">{upcomingDeadlines.length} échéances</span>
+          </div>
+          <div className="space-y-2">
+            {upcomingDeadlines.length === 0 && <div className="text-sm text-zinc-500 py-4">Aucune deadline imminente.</div>}
+            {upcomingDeadlines.map(p => {
+              const client = clients.find(c => c.id === p.clientId);
+              const days = daysUntil(p.deadline);
+              const urgent = days <= 3;
+              const overdue = days < 0;
+              return (
+                <button key={p.id} onClick={() => onSelectProject(p)} className="w-full flex items-center gap-4 p-3 rounded-lg hover:bg-zinc-800/50 transition-colors text-left group">
+                  <div className={`w-1 h-10 rounded-full ${overdue ? 'bg-rose-500' : urgent ? 'bg-amber-500' : 'bg-zinc-700'}`}></div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="text-zinc-100 font-medium truncate">{p.title}</span>
+                      <StagePill stage={p.stage} />
+                    </div>
+                    <div className="text-xs text-zinc-500 font-body">{client?.company} · {p.type}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className={`font-mono text-sm ${overdue ? 'text-rose-400' : urgent ? 'text-amber-400' : 'text-zinc-300'}`}>{fmtDate(p.deadline)}</div>
+                    <div className="text-xs text-zinc-500 font-mono">{overdue ? `J${days}` : days === 0 ? "aujourd'hui" : `J-${days}`}</div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 transition-colors" />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5">
+          <h2 className="font-display text-xl text-zinc-100 mb-4">Cash-flow</h2>
+          <div className="h-48 -mx-2">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+                <XAxis dataKey="label" tick={{ fill: '#71717a', fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: '#71717a', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${(v/1000).toFixed(0)}k`} />
+                <Tooltip contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 8, fontSize: 12 }} formatter={v => eur(v)} />
+                <Bar dataKey="paid" fill="#10b981" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="text-xs text-zinc-500 font-body mt-2">Encaissements mensuels — 6 derniers mois</div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ PROJECTS VIEW (KANBAN) ============
+const ProjectsView = ({ projects, clients, onSelectProject, onNewProject }) => {
+  const [filterClient, setFilterClient] = useState('all');
+  const filtered = projects.filter(p => filterClient === 'all' || p.clientId === filterClient);
+
+  return (
+    <div className="space-y-6 animate-in">
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-2">Projets</div>
+          <h1 className="font-display text-4xl text-zinc-100 tracking-tight">Pipeline</h1>
+        </div>
+        <div className="flex items-center gap-3">
+          <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-sm px-3 py-2 rounded-lg font-body focus:border-zinc-600 focus:outline-none">
+            <option value="all">Tous les clients</option>
+            {clients.map(c => <option key={c.id} value={c.id}>{c.company}</option>)}
+          </select>
+          <button onClick={onNewProject} className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium text-sm px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
+            <Plus className="w-4 h-4" /> Projet
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-5 gap-3 min-h-[60vh]">
+        {STAGES.map(stage => {
+          const c = STAGE_COLORS[stage.color];
+          const stageProjects = filtered.filter(p => p.stage === stage.id);
+          return (
+            <div key={stage.id} className="flex flex-col">
+              <div className={`${c.bg} ${c.border} border rounded-lg px-3 py-2.5 mb-3`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${c.dot}`}></span>
+                    <span className={`text-xs font-medium ${c.text}`}>{stage.label}</span>
+                  </div>
+                  <span className="font-mono text-xs text-zinc-500">{stageProjects.length}</span>
+                </div>
+              </div>
+              <div className="flex-1 space-y-2">
+                {stageProjects.map(p => {
+                  const client = clients.find(cl => cl.id === p.clientId);
+                  const days = daysUntil(p.deadline);
+                  const urgent = days <= 3 && days >= 0 && p.stage !== 'invoicing';
+                  const overdue = days < 0 && p.stage !== 'invoicing';
+                  return (
+                    <button key={p.id} onClick={() => onSelectProject(p)} className="w-full text-left bg-zinc-900/80 border border-zinc-800 rounded-lg p-3 hover:border-zinc-600 transition-all group">
+                      <div className="text-xs text-zinc-500 font-body mb-1 truncate">{client?.company}</div>
+                      <div className="text-sm text-zinc-100 font-medium mb-3 leading-snug">{p.title}</div>
+                      <div className="flex items-center justify-between text-xs">
+                        <div className={`flex items-center gap-1 font-mono ${overdue ? 'text-rose-400' : urgent ? 'text-amber-400' : 'text-zinc-500'}`}>
+                          <Clock className="w-3 h-3" />
+                          {fmtDate(p.deadline)}
+                        </div>
+                        <div className="font-mono text-zinc-400">{eur(p.budget)}</div>
+                      </div>
+                      {p.revisions > 0 && (
+                        <div className="mt-2 text-xs text-violet-400 font-mono">⟲ {p.revisions} révision{p.revisions > 1 ? 's' : ''}</div>
+                      )}
+                    </button>
+                  );
+                })}
+                {stageProjects.length === 0 && (
+                  <div className="text-xs text-zinc-600 text-center py-6 font-body italic">Vide</div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// ============ CALENDAR VIEW ============
+const CalendarView = ({ projects, clients, invoices, onSelectProject }) => {
+  const [cursor, setCursor] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+
+  const days = useMemo(() => {
+    const year = cursor.getFullYear();
+    const month = cursor.getMonth();
+    const first = new Date(year, month, 1);
+    const last = new Date(year, month + 1, 0);
+    const startDay = (first.getDay() + 6) % 7;
+    const grid = [];
+    for (let i = 0; i < startDay; i++) {
+      const d = new Date(year, month, -startDay + i + 1);
+      grid.push({ date: d, outside: true });
+    }
+    for (let i = 1; i <= last.getDate(); i++) grid.push({ date: new Date(year, month, i), outside: false });
+    while (grid.length % 7 !== 0) {
+      const lastD = grid[grid.length - 1].date;
+      const d = new Date(lastD); d.setDate(d.getDate() + 1);
+      grid.push({ date: d, outside: true });
+    }
+    while (grid.length < 42) {
+      const lastD = grid[grid.length - 1].date;
+      const d = new Date(lastD); d.setDate(d.getDate() + 1);
+      grid.push({ date: d, outside: true });
+    }
+    return grid;
+  }, [cursor]);
+
+  const eventsForDay = (date) => {
+    const ds = date.toISOString().slice(0, 10);
+    const events = [];
+    projects.forEach(p => {
+      if (p.deadline === ds) events.push({ type: 'deadline', project: p });
+    });
+    invoices.forEach(i => {
+      if (i.dueDate === ds && i.status !== 'paid') events.push({ type: 'invoice-due', invoice: i });
+    });
+    return events;
+  };
+
+  return (
+    <div className="space-y-6 animate-in">
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-2">Calendrier</div>
+          <h1 className="font-display text-4xl text-zinc-100 tracking-tight capitalize">
+            {cursor.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}
+          </h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))} className="w-9 h-9 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100 hover:border-zinc-600 flex items-center justify-center transition-colors">
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <button onClick={() => setCursor(new Date(today.getFullYear(), today.getMonth(), 1))} className="text-sm px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 hover:border-zinc-600 font-body transition-colors">Aujourd'hui</button>
+          <button onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))} className="w-9 h-9 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100 hover:border-zinc-600 flex items-center justify-center transition-colors">
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl overflow-hidden">
+        <div className="grid grid-cols-7 border-b border-zinc-800">
+          {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map(d => (
+            <div key={d} className="px-3 py-2 text-xs uppercase tracking-widest text-zinc-500 font-mono text-center">{d}</div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7">
+          {days.map((d, i) => {
+            const events = eventsForDay(d.date);
+            const isToday = d.date.toDateString() === today.toDateString();
+            return (
+              <div key={i} className={`min-h-[110px] border-r border-b border-zinc-800/60 p-2 ${d.outside ? 'opacity-30' : ''} ${isToday ? 'bg-amber-500/5' : ''}`}>
+                <div className={`text-xs font-mono mb-1.5 ${isToday ? 'text-amber-400 font-bold' : d.outside ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                  {d.date.getDate()}
+                </div>
+                <div className="space-y-1">
+                  {events.slice(0, 3).map((ev, idx) => {
+                    if (ev.type === 'deadline') {
+                      const c = STAGE_COLORS[stageMeta(ev.project.stage).color];
+                      const client = clients.find(cl => cl.id === ev.project.clientId);
+                      return (
+                        <button key={idx} onClick={() => onSelectProject(ev.project)} className={`w-full text-left ${c.bg} ${c.border} border rounded px-1.5 py-1 group hover:opacity-80 transition`}>
+                          <div className="flex items-center gap-1">
+                            <span className={`w-1 h-1 rounded-full ${c.dot} flex-shrink-0`}></span>
+                            <span className={`text-[10px] font-mono ${c.text} truncate`}>⏱ {client?.company.split(' ')[0]}</span>
+                          </div>
+                          <div className="text-[10px] text-zinc-300 truncate font-body">{ev.project.title}</div>
+                        </button>
+                      );
+                    }
+                    if (ev.type === 'invoice-due') {
+                      const overdue = ev.invoice.status === 'overdue';
+                      return (
+                        <div key={idx} className={`${overdue ? 'bg-rose-500/10 border-rose-500/30' : 'bg-amber-500/10 border-amber-500/30'} border rounded px-1.5 py-1`}>
+                          <div className={`text-[10px] font-mono ${overdue ? 'text-rose-300' : 'text-amber-300'} truncate`}>€ {ev.invoice.number.slice(-4)}</div>
+                          <div className="text-[10px] text-zinc-300 truncate font-body">{eur(ev.invoice.amount)}</div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })}
+                  {events.length > 3 && <div className="text-[10px] text-zinc-500 font-mono px-1">+{events.length - 3}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-4 text-xs text-zinc-500 font-body flex-wrap">
+        <span>Légende :</span>
+        {STAGES.map(s => {
+          const c = STAGE_COLORS[s.color];
+          return <span key={s.id} className="flex items-center gap-1.5"><span className={`w-2 h-2 rounded-full ${c.dot}`}></span>{s.label}</span>;
+        })}
+        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-rose-400"></span>Facture en retard</span>
+      </div>
+    </div>
+  );
+};
+
+// ============ INVOICES VIEW ============
+const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoice }) => {
+  const [filter, setFilter] = useState('all');
+  const filtered = invoices.filter(i => filter === 'all' || i.status === filter).sort((a, b) => new Date(b.issueDate) - new Date(a.issueDate));
+
+  const totalInvoiced = invoices.reduce((s, i) => s + i.amount, 0);
+  const totalPaid = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.amount, 0);
+  const totalPending = invoices.filter(i => i.status === 'pending').reduce((s, i) => s + i.amount, 0);
+  const totalOverdue = invoices.filter(i => i.status === 'overdue').reduce((s, i) => s + i.amount, 0);
+
+  return (
+    <div className="space-y-6 animate-in">
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-2">Facturation</div>
+          <h1 className="font-display text-4xl text-zinc-100 tracking-tight">Factures</h1>
+        </div>
+        <button onClick={onNewInvoice} className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium text-sm px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
+          <Plus className="w-4 h-4" /> Nouvelle facture
+        </button>
+      </div>
+
+      <div className="grid grid-cols-4 gap-4">
+        <KPICard label="Total facturé" value={eur(totalInvoiced)} sub={`${invoices.length} factures émises`} icon={Receipt} />
+        <KPICard label="Encaissé" value={eur(totalPaid)} sub={`${((totalPaid / totalInvoiced) * 100 || 0).toFixed(0)}% du total`} accent="emerald" icon={CheckCircle2} />
+        <KPICard label="En attente" value={eur(totalPending)} accent="amber" icon={Clock} />
+        <KPICard label="En retard" value={eur(totalOverdue)} accent="rose" icon={AlertCircle} />
+      </div>
+
+      <div className="flex items-center gap-2">
+        {[{ id: 'all', label: 'Toutes' }, { id: 'pending', label: 'En attente' }, { id: 'paid', label: 'Payées' }, { id: 'overdue', label: 'En retard' }].map(f => (
+          <button key={f.id} onClick={() => setFilter(f.id)} className={`text-sm px-3 py-1.5 rounded-lg font-body transition-colors ${filter === f.id ? 'bg-zinc-100 text-zinc-900' : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100'}`}>
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl overflow-hidden overflow-x-auto">
+        <table className="w-full">
+          <thead className="border-b border-zinc-800">
+            <tr className="text-left">
+              <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono">N°</th>
+              <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono">Client</th>
+              <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono">Projet</th>
+              <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono">Émise</th>
+              <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono">Échéance</th>
+              <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono text-right">Montant</th>
+              <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono">Statut</th>
+              <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono">GHL</th>
+              <th className="px-4 py-3"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(inv => {
+              const client = clients.find(c => c.id === inv.clientId);
+              const project = projects.find(p => p.id === inv.projectId);
+              return (
+                <tr key={inv.id} className="border-b border-zinc-800/60 hover:bg-zinc-800/30 transition-colors">
+                  <td className="px-4 py-3 font-mono text-xs text-zinc-300">{inv.number}</td>
+                  <td className="px-4 py-3 text-sm text-zinc-200">{client?.company}</td>
+                  <td className="px-4 py-3 text-sm text-zinc-400 truncate max-w-[200px]">{project?.title}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-zinc-400">{fmtDate(inv.issueDate)}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-zinc-400">{fmtDate(inv.dueDate)}</td>
+                  <td className="px-4 py-3 font-mono text-sm text-zinc-100 text-right">{eur(inv.amount)}</td>
+                  <td className="px-4 py-3"><StatusPill status={inv.status} /></td>
+                  <td className="px-4 py-3">
+                    <a href={inv.ghlLink} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="text-xs text-zinc-500 hover:text-amber-400 inline-flex items-center gap-1 font-mono">
+                      mock <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </td>
+                  <td className="px-4 py-3">
+                    {inv.status !== 'paid' && (
+                      <button onClick={() => onUpdateInvoice(inv.id, { status: 'paid', paidDate: today.toISOString().slice(0, 10) })} className="text-xs text-emerald-400 hover:text-emerald-300 font-medium font-body whitespace-nowrap">
+                        Marquer payée
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {filtered.length === 0 && (
+              <tr><td colSpan="9" className="px-4 py-12 text-center text-zinc-500 text-sm">Aucune facture.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="text-xs text-zinc-500 font-body italic">
+        💡 Intégration GHL en mock. Une fois branché, les statuts de paiement remonteront automatiquement via webhook.
+      </div>
+    </div>
+  );
+};
+
+// ============ CLIENTS VIEW ============
+const ClientsView = ({ clients, projects, invoices, onNewClient }) => (
+  <div className="space-y-6 animate-in">
+    <div className="flex items-end justify-between">
+      <div>
+        <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-2">Clients</div>
+        <h1 className="font-display text-4xl text-zinc-100 tracking-tight">Carnet</h1>
+      </div>
+      <button onClick={onNewClient} className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium text-sm px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
+        <Plus className="w-4 h-4" /> Nouveau client
+      </button>
+    </div>
+
+    <div className="grid grid-cols-3 gap-4">
+      {clients.map(c => {
+        const clientProjects = projects.filter(p => p.clientId === c.id);
+        const clientInvoices = invoices.filter(i => i.clientId === c.id);
+        const totalRevenue = clientInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.amount, 0);
+        const pending = clientInvoices.filter(i => i.status !== 'paid').reduce((s, i) => s + i.amount, 0);
+        return (
+          <div key={c.id} className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5 hover:border-zinc-700 transition-colors">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <div className="font-display text-xl text-zinc-100">{c.company}</div>
+                <div className="text-sm text-zinc-400 font-body">{c.name}</div>
+              </div>
+              <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center font-display text-amber-400">
+                {c.company.charAt(0)}
+              </div>
+            </div>
+            <div className="space-y-1 text-xs text-zinc-500 font-mono mb-4">
+              <div>{c.email}</div>
+              <div>{c.phone}</div>
+            </div>
+            <div className="grid grid-cols-3 gap-2 pt-4 border-t border-zinc-800">
+              <div>
+                <div className="text-xs text-zinc-500 font-mono">Projets</div>
+                <div className="font-display text-lg text-zinc-100">{clientProjects.length}</div>
+              </div>
+              <div>
+                <div className="text-xs text-zinc-500 font-mono">Encaissé</div>
+                <div className="font-display text-lg text-emerald-400">{eur(totalRevenue)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-zinc-500 font-mono">En attente</div>
+                <div className="font-display text-lg text-amber-400">{eur(pending)}</div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  </div>
+);
+
+// ============ PROJECT DETAIL MODAL ============
+const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete }) => {
+  const [editing, setEditing] = useState(false);
+  const [data, setData] = useState(project);
+  if (!project) return null;
+  const client = clients.find(c => c.id === project.clientId);
+  const projectInvoices = invoices.filter(i => i.projectId === project.id);
+  const stageIdx = STAGES.findIndex(s => s.id === project.stage);
+
+  const handleSave = () => { onUpdate(data); setEditing(false); };
+  const advanceStage = () => { if (stageIdx < STAGES.length - 1) onUpdate({ ...project, stage: STAGES[stageIdx + 1].id }); };
+  const previousStage = () => { if (stageIdx > 0) onUpdate({ ...project, stage: STAGES[stageIdx - 1].id }); };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
+      <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto scrollbar-thin" onClick={e => e.stopPropagation()}>
+        <div className="sticky top-0 bg-zinc-950 border-b border-zinc-800 p-5 flex items-start justify-between z-10">
+          <div className="flex-1">
+            <div className="flex items-center gap-3 mb-2">
+              <StagePill stage={project.stage} size="md" />
+              <span className="text-xs font-mono text-zinc-500">{client?.company}</span>
+            </div>
+            {editing ? (
+              <input value={data.title} onChange={e => setData({ ...data, title: e.target.value })} className="font-display text-2xl text-zinc-100 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 w-full" />
+            ) : (
+              <h2 className="font-display text-2xl text-zinc-100">{project.title}</h2>
+            )}
+            <div className="text-xs text-zinc-500 font-body mt-1">{project.type}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            {!editing && <button onClick={() => setEditing(true)} className="w-9 h-9 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center"><Edit3 className="w-4 h-4" /></button>}
+            {editing && <button onClick={handleSave} className="px-3 h-9 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-sm font-medium">Sauvegarder</button>}
+            <button onClick={onClose} className="w-9 h-9 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center"><X className="w-4 h-4" /></button>
+          </div>
+        </div>
+
+        <div className="p-5 border-b border-zinc-800">
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-3">Étape</div>
+          <div className="flex items-center gap-1">
+            {STAGES.map((s, i) => {
+              const c = STAGE_COLORS[s.color];
+              const done = i < stageIdx;
+              const current = i === stageIdx;
+              return (
+                <React.Fragment key={s.id}>
+                  <div className={`flex-1 px-2 py-2 rounded-lg border text-center ${current ? `${c.bg} ${c.border} ${c.text}` : done ? 'bg-zinc-800 border-zinc-700 text-zinc-400' : 'bg-zinc-900 border-zinc-800 text-zinc-600'}`}>
+                    <div className="text-[10px] font-mono uppercase tracking-wider">{s.label}</div>
+                  </div>
+                  {i < STAGES.length - 1 && <div className={`w-2 h-px ${i < stageIdx ? 'bg-zinc-600' : 'bg-zinc-800'}`}></div>}
+                </React.Fragment>
+              );
+            })}
+          </div>
+          <div className="flex items-center justify-between mt-4">
+            <button onClick={previousStage} disabled={stageIdx === 0} className="text-sm text-zinc-400 hover:text-zinc-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1 font-body">
+              <ChevronLeft className="w-4 h-4" /> Étape précédente
+            </button>
+            <button onClick={advanceStage} disabled={stageIdx === STAGES.length - 1} className="text-sm bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 disabled:opacity-30 disabled:cursor-not-allowed px-3 py-1.5 rounded-lg flex items-center gap-1 font-body">
+              Étape suivante <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-px bg-zinc-800">
+          <div className="bg-zinc-950 p-5">
+            <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-3">Dates</div>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-zinc-400 font-body">Démarrage</span>
+                <span className="font-mono text-sm text-zinc-200">{fmtDateLong(project.startDate)}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-zinc-400 font-body">Deadline</span>
+                {editing ? (
+                  <input type="date" value={data.deadline} onChange={e => setData({ ...data, deadline: e.target.value })} className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm font-mono text-zinc-200" />
+                ) : (
+                  <span className={`font-mono text-sm ${daysUntil(project.deadline) < 0 ? 'text-rose-400' : daysUntil(project.deadline) <= 3 ? 'text-amber-400' : 'text-zinc-200'}`}>{fmtDateLong(project.deadline)}</span>
+                )}
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-zinc-400 font-body">Restant</span>
+                <span className="font-mono text-sm text-zinc-200">{daysUntil(project.deadline) >= 0 ? `J-${daysUntil(project.deadline)}` : `J+${Math.abs(daysUntil(project.deadline))} (dépassée)`}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-zinc-400 font-body">Révisions</span>
+                <span className="font-mono text-sm text-violet-300">{project.revisions}</span>
+              </div>
+            </div>
+          </div>
+          <div className="bg-zinc-950 p-5">
+            <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-3">Financier</div>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-zinc-400 font-body">Budget</span>
+                {editing ? (
+                  <input type="number" value={data.budget} onChange={e => setData({ ...data, budget: parseFloat(e.target.value) })} className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm font-mono text-zinc-200 w-24 text-right" />
+                ) : (
+                  <span className="font-mono text-sm text-zinc-100">{eur(project.budget)}</span>
+                )}
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-zinc-400 font-body">Facturé</span>
+                <span className="font-mono text-sm text-amber-300">{eur(project.invoicedAmount)}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-zinc-400 font-body">Encaissé</span>
+                <span className="font-mono text-sm text-emerald-300">{eur(project.paidAmount)}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-zinc-400 font-body">Reste à encaisser</span>
+                <span className="font-mono text-sm text-zinc-200">{eur(project.budget - project.paidAmount)}</span>
+              </div>
+              <div className="pt-2">
+                <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                  <div className="h-full bg-emerald-500" style={{ width: `${Math.min(100, (project.paidAmount / project.budget) * 100)}%` }}></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-5 border-t border-zinc-800">
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-3">Notes</div>
+          {editing ? (
+            <textarea value={data.notes} onChange={e => setData({ ...data, notes: e.target.value })} rows="3" className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-200 font-body" />
+          ) : (
+            <div className="text-sm text-zinc-300 font-body leading-relaxed">{project.notes || <em className="text-zinc-600">Aucune note.</em>}</div>
+          )}
+        </div>
+
+        <div className="p-5 border-t border-zinc-800">
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-3">Factures liées</div>
+          <div className="space-y-2">
+            {projectInvoices.length === 0 && <div className="text-sm text-zinc-600 italic font-body">Aucune facture émise.</div>}
+            {projectInvoices.map(inv => (
+              <div key={inv.id} className="flex items-center justify-between p-3 bg-zinc-900/60 border border-zinc-800 rounded-lg">
+                <div className="flex items-center gap-3">
+                  <span className="font-mono text-xs text-zinc-400">{inv.number}</span>
+                  <StatusPill status={inv.status} />
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-zinc-500 font-mono">Échéance {fmtDate(inv.dueDate)}</span>
+                  <span className="font-mono text-sm text-zinc-100">{eur(inv.amount)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="p-5 border-t border-zinc-800 flex justify-between items-center">
+          <button onClick={() => { if (confirm(`Supprimer "${project.title}" ?`)) { onDelete(project.id); onClose(); } }} className="text-sm text-rose-400 hover:text-rose-300 flex items-center gap-1 font-body">
+            <Trash2 className="w-4 h-4" /> Supprimer
+          </button>
+          <button onClick={onClose} className="text-sm text-zinc-400 hover:text-zinc-100 px-4 py-2 font-body">Fermer</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ NEW PROJECT MODAL ============
+const NewProjectModal = ({ clients, onClose, onCreate }) => {
+  const [data, setData] = useState({
+    clientId: clients[0]?.id || '',
+    title: '',
+    type: PROJECT_TYPES[0],
+    startDate: today.toISOString().slice(0, 10),
+    deadline: dateOffset(14),
+    budget: 5000,
+    notes: ''
+  });
+
+  const submit = () => {
+    if (!data.title || !data.clientId) return;
+    onCreate({
+      id: 'p' + Date.now(),
+      ...data,
+      stage: 'onboarding',
+      invoicedAmount: 0,
+      paidAmount: 0,
+      revisions: 0,
+      createdAt: today.toISOString().slice(0, 10)
+    });
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
+      <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-lg" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+          <h2 className="font-display text-2xl text-zinc-100">Nouveau projet</h2>
+          <button onClick={onClose} className="w-9 h-9 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 flex items-center justify-center"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Client</label>
+            <select value={data.clientId} onChange={e => setData({ ...data, clientId: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-body">
+              {clients.map(c => <option key={c.id} value={c.id}>{c.company} — {c.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Titre</label>
+            <input value={data.title} onChange={e => setData({ ...data, title: e.target.value })} placeholder="Ex: Spot pub printemps" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-body" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Type</label>
+              <select value={data.type} onChange={e => setData({ ...data, type: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-body">
+                {PROJECT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Budget €</label>
+              <input type="number" value={data.budget} onChange={e => setData({ ...data, budget: parseFloat(e.target.value) || 0 })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-mono" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Démarrage</label>
+              <input type="date" value={data.startDate} onChange={e => setData({ ...data, startDate: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-mono" />
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Deadline</label>
+              <input type="date" value={data.deadline} onChange={e => setData({ ...data, deadline: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-mono" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Notes</label>
+            <textarea value={data.notes} onChange={e => setData({ ...data, notes: e.target.value })} rows="3" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-body" placeholder="Brief, contraintes, livrables..." />
+          </div>
+        </div>
+        <div className="p-5 border-t border-zinc-800 flex justify-end gap-2">
+          <button onClick={onClose} className="text-sm px-4 py-2 text-zinc-400 hover:text-zinc-100 font-body">Annuler</button>
+          <button onClick={submit} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium rounded-lg">Créer le projet</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ NEW CLIENT MODAL ============
+const NewClientModal = ({ onClose, onCreate }) => {
+  const [data, setData] = useState({ name: '', company: '', email: '', phone: '' });
+  const submit = () => {
+    if (!data.company || !data.name) return;
+    onCreate({ id: 'c' + Date.now(), ...data, createdAt: today.toISOString().slice(0, 10) });
+    onClose();
+  };
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
+      <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+          <h2 className="font-display text-2xl text-zinc-100">Nouveau client</h2>
+          <button onClick={onClose} className="w-9 h-9 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 flex items-center justify-center"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Société</label>
+            <input value={data.company} onChange={e => setData({ ...data, company: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-body" />
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Contact</label>
+            <input value={data.name} onChange={e => setData({ ...data, name: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-body" />
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Email</label>
+            <input type="email" value={data.email} onChange={e => setData({ ...data, email: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-mono" />
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Téléphone</label>
+            <input value={data.phone} onChange={e => setData({ ...data, phone: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-mono" />
+          </div>
+        </div>
+        <div className="p-5 border-t border-zinc-800 flex justify-end gap-2">
+          <button onClick={onClose} className="text-sm px-4 py-2 text-zinc-400 hover:text-zinc-100 font-body">Annuler</button>
+          <button onClick={submit} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium rounded-lg">Créer</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ NEW INVOICE MODAL ============
+const NewInvoiceModal = ({ projects, clients, invoices, onClose, onCreate }) => {
+  const [data, setData] = useState({
+    projectId: projects[0]?.id || '',
+    amount: 1000,
+    dueDate: dateOffset(14)
+  });
+
+  const project = projects.find(p => p.id === data.projectId);
+  const nextNumber = `JESSE-2026-${String(48 + invoices.length).padStart(4, '0')}`;
+
+  const submit = () => {
+    if (!project) return;
+    onCreate({
+      id: 'i' + Date.now(),
+      number: nextNumber,
+      projectId: data.projectId,
+      clientId: project.clientId,
+      amount: parseFloat(data.amount),
+      status: 'pending',
+      issueDate: today.toISOString().slice(0, 10),
+      dueDate: data.dueDate,
+      paidDate: null,
+      ghlLink: `https://app.gohighlevel.com/inv/mock-${48 + invoices.length}`
+    });
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
+      <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+          <h2 className="font-display text-2xl text-zinc-100">Nouvelle facture</h2>
+          <button onClick={onClose} className="w-9 h-9 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 flex items-center justify-center"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">N° auto</label>
+            <div className="font-mono text-sm text-amber-300 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2">{nextNumber}</div>
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Projet</label>
+            <select value={data.projectId} onChange={e => setData({ ...data, projectId: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-body">
+              {projects.map(p => {
+                const c = clients.find(cl => cl.id === p.clientId);
+                return <option key={p.id} value={p.id}>{c?.company} — {p.title}</option>;
+              })}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Montant €</label>
+              <input type="number" value={data.amount} onChange={e => setData({ ...data, amount: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-mono" />
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Échéance</label>
+              <input type="date" value={data.dueDate} onChange={e => setData({ ...data, dueDate: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-mono" />
+            </div>
+          </div>
+        </div>
+        <div className="p-5 border-t border-zinc-800 flex justify-end gap-2">
+          <button onClick={onClose} className="text-sm px-4 py-2 text-zinc-400 hover:text-zinc-100 font-body">Annuler</button>
+          <button onClick={submit} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium rounded-lg">Émettre</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ MAIN APP ============
+function JesseDashboard() {
+  const [activeView, setActiveView] = useState('dashboard');
+  const [clients, setClients] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedProject, setSelectedProject] = useState(null);
+  const [showNewProject, setShowNewProject] = useState(false);
+  const [showNewClient, setShowNewClient] = useState(false);
+  const [showNewInvoice, setShowNewInvoice] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  useEffect(() => {
+    const stored = loadStore();
+    if (stored) {
+      setClients(stored.clients || seedClients);
+      setProjects(stored.projects || seedProjects);
+      setInvoices(stored.invoices || seedInvoices);
+    } else {
+      setClients(seedClients);
+      setProjects(seedProjects);
+      setInvoices(seedInvoices);
+    }
+    setLoading(false);
+    const el = document.getElementById('loading');
+    if (el) el.style.display = 'none';
+  }, []);
+
+  useEffect(() => {
+    if (!loading) saveStore({ clients, projects, invoices });
+  }, [clients, projects, invoices, loading]);
+
+  const updateProject = (data) => {
+    setProjects(projects.map(p => p.id === data.id ? data : p));
+    if (selectedProject?.id === data.id) setSelectedProject(data);
+  };
+  const deleteProject = (id) => setProjects(projects.filter(p => p.id !== id));
+  const createProject = (p) => setProjects([...projects, p]);
+  const createClient = (c) => setClients([...clients, c]);
+  const updateInvoice = (id, patch) => setInvoices(invoices.map(i => i.id === id ? { ...i, ...patch } : i));
+  const createInvoice = (inv) => {
+    setInvoices([...invoices, inv]);
+    setProjects(projects.map(p => p.id === inv.projectId ? { ...p, invoicedAmount: p.invoicedAmount + inv.amount } : p));
+  };
+
+  const navItems = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'projects', label: 'Projets', icon: FolderKanban },
+    { id: 'calendar', label: 'Calendrier', icon: CalendarDays },
+    { id: 'invoices', label: 'Facturation', icon: Receipt },
+    { id: 'clients', label: 'Clients', icon: Users }
+  ];
+
+  if (loading) return null;
+
+  return (
+    <div className="min-h-screen bg-zinc-950 text-zinc-200 grain font-body">
+      <div className="flex min-h-screen">
+        <aside className="w-60 border-r border-zinc-800/80 bg-zinc-950/95 flex flex-col">
+          <div className="p-5 border-b border-zinc-800/80">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center">
+                <Film className="w-5 h-5 text-zinc-950" />
+              </div>
+              <div>
+                <div className="font-display text-xl text-zinc-100 leading-none">Jesse</div>
+                <div className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest">Studio OS</div>
+              </div>
+            </div>
+          </div>
+
+          <nav className="flex-1 p-3">
+            {navItems.map(n => {
+              const Icon = n.icon;
+              const active = activeView === n.id;
+              return (
+                <button key={n.id} onClick={() => setActiveView(n.id)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-body mb-1 transition-colors ${active ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900'}`}>
+                  <Icon className="w-4 h-4" />
+                  {n.label}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="p-3 border-t border-zinc-800/80">
+            <div className="bg-zinc-900/60 rounded-lg p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <div className="text-xs font-medium text-zinc-200">GHL connecté</div>
+              </div>
+              <div className="text-[11px] text-zinc-500 font-body leading-relaxed">Mock activé · webhook prêt à brancher</div>
+            </div>
+          </div>
+        </aside>
+
+        <main className="flex-1 flex flex-col min-w-0">
+          <header className="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-10">
+            <div className="flex items-center gap-4 px-6 py-3">
+              <div className="flex-1 max-w-md relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+                <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Rechercher un projet, un client…" className="w-full bg-zinc-900/60 border border-zinc-800 rounded-lg pl-10 pr-3 py-2 text-sm text-zinc-200 font-body focus:border-zinc-600 focus:outline-none" />
+              </div>
+              <div className="text-xs text-zinc-500 font-mono">{today.toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: 'long' })}</div>
+              <button className="w-9 h-9 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center relative">
+                <Bell className="w-4 h-4" />
+                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+              </button>
+              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center text-xs font-medium text-zinc-200">RB</div>
+            </div>
+          </header>
+
+          <div className="flex-1 p-6 overflow-y-auto scrollbar-thin">
+            {activeView === 'dashboard' && (
+              <DashboardView projects={projects} invoices={invoices} clients={clients} onSelectProject={setSelectedProject} onNewProject={() => setShowNewProject(true)} />
+            )}
+            {activeView === 'projects' && (
+              <ProjectsView projects={projects} clients={clients} onSelectProject={setSelectedProject} onNewProject={() => setShowNewProject(true)} />
+            )}
+            {activeView === 'calendar' && (
+              <CalendarView projects={projects} clients={clients} invoices={invoices} onSelectProject={setSelectedProject} />
+            )}
+            {activeView === 'invoices' && (
+              <InvoicesView invoices={invoices} clients={clients} projects={projects} onUpdateInvoice={updateInvoice} onNewInvoice={() => setShowNewInvoice(true)} />
+            )}
+            {activeView === 'clients' && (
+              <ClientsView clients={clients} projects={projects} invoices={invoices} onNewClient={() => setShowNewClient(true)} />
+            )}
+          </div>
+        </main>
+      </div>
+
+      {selectedProject && <ProjectDetail project={selectedProject} clients={clients} invoices={invoices} onClose={() => setSelectedProject(null)} onUpdate={updateProject} onDelete={deleteProject} />}
+      {showNewProject && <NewProjectModal clients={clients} onClose={() => setShowNewProject(false)} onCreate={createProject} />}
+      {showNewClient && <NewClientModal onClose={() => setShowNewClient(false)} onCreate={createClient} />}
+      {showNewInvoice && <NewInvoiceModal projects={projects} clients={clients} invoices={invoices} onClose={() => setShowNewInvoice(false)} onCreate={createInvoice} />}
+    </div>
+  );
+}
+
+createRoot(document.getElementById('root')).render(<JesseDashboard />);
+</script>
+</body>
+</html>
