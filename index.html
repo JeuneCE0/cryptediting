@@ -50,13 +50,17 @@
 <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
 
 <script type="text/babel" data-type="module" data-presets="react">
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   LayoutDashboard, FolderKanban, CalendarDays, Receipt, Users, Plus,
   Search, Bell, ChevronRight, ChevronLeft, X, Edit3,
   Trash2, Clock, FileVideo, CheckCircle2, AlertCircle,
-  Film, Sparkles, TrendingUp, ExternalLink
+  Film, Sparkles, TrendingUp, ExternalLink, Download, RotateCcw,
+  Check, Mail, Phone, Building2, Inbox,
+  ListTodo, Link2, PlayCircle, Cloud, MessageSquare, GripVertical,
+  Send, HardDrive, Youtube, Square, CheckSquare,
+  Sun, Copy, Files, Zap, ArrowRight
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from 'recharts';
 
@@ -79,6 +83,141 @@ const STAGE_COLORS = {
 
 const PROJECT_TYPES = ['Publicité', 'Corporate', 'Social Media', 'Clip musical', 'Documentaire', 'Événement', 'Mariage', 'Aftermovie'];
 
+// Templates de tâches par type de projet (workflow post-prod typique)
+const TASK_TEMPLATES = {
+  'Publicité': ['Brief & moodboard', 'Storyboard', 'Tournage', 'Dérushage', 'Cut V1', 'Étalonnage', 'Mixage audio', 'Export master', 'Livraison client'],
+  'Corporate': ['Brief', 'Tournage', 'Dérushage', 'Cut V1', 'Voix off', 'Étalonnage', 'Mixage audio', 'Export', 'Livraison'],
+  'Social Media': ['Brief', 'Dérushage', 'Cut court', 'Sous-titrage', 'Export 9:16', 'Export 1:1', 'Livraison'],
+  'Clip musical': ['Brief & repérage', 'Storyboard', 'Tournage', 'Dérushage', 'Cut V1', 'VFX', 'Étalonnage', 'Master audio sync', 'Export'],
+  'Documentaire': ['Recherche', 'Interviews', 'Tournage B-roll', 'Dérushage', 'Sélection', 'Cut V1', 'Étalonnage', 'Mixage', 'Export'],
+  'Événement': ['Tournage multi-cam', 'Dérushage', 'Synchro audio', 'Cut V1', 'Étalonnage léger', 'Export', 'Livraison'],
+  'Mariage': ['Tournage J-J', 'Dérushage', 'Sélection moments forts', 'Teaser 1min', 'Film court 5min', 'Film complet', 'Étalonnage', 'Mix audio', 'Livraison galerie'],
+  'Aftermovie': ['Tournage', 'Dérushage', 'Sélection energy moments', 'Cut au rythme', 'Étalonnage', 'Mix musique/ambiance', 'Export', 'Livraison']
+};
+
+const DELIVERABLE_KINDS = {
+  frameio:    { label: 'Frame.io',     icon: PlayCircle, color: 'text-violet-300', bg: 'bg-violet-500/10', border: 'border-violet-500/30' },
+  drive:      { label: 'Google Drive', icon: HardDrive,  color: 'text-sky-300',    bg: 'bg-sky-500/10',    border: 'border-sky-500/30' },
+  wetransfer: { label: 'WeTransfer',   icon: Send,       color: 'text-cyan-300',   bg: 'bg-cyan-500/10',   border: 'border-cyan-500/30' },
+  dropbox:    { label: 'Dropbox',      icon: Cloud,      color: 'text-blue-300',   bg: 'bg-blue-500/10',   border: 'border-blue-500/30' },
+  youtube:    { label: 'YouTube',      icon: Youtube,    color: 'text-rose-300',   bg: 'bg-rose-500/10',   border: 'border-rose-500/30' },
+  vimeo:      { label: 'Vimeo',        icon: PlayCircle, color: 'text-teal-300',   bg: 'bg-teal-500/10',   border: 'border-teal-500/30' },
+  other:      { label: 'Autre',        icon: Link2,      color: 'text-zinc-300',   bg: 'bg-zinc-700/30',   border: 'border-zinc-600' }
+};
+
+// Détecte le type de livrable depuis l'URL (best effort)
+const guessKind = (url) => {
+  if (!url) return 'other';
+  const u = url.toLowerCase();
+  if (u.includes('frame.io') || u.includes('f.io')) return 'frameio';
+  if (u.includes('drive.google') || u.includes('docs.google')) return 'drive';
+  if (u.includes('wetransfer') || u.includes('we.tl')) return 'wetransfer';
+  if (u.includes('dropbox')) return 'dropbox';
+  if (u.includes('youtube.com') || u.includes('youtu.be')) return 'youtube';
+  if (u.includes('vimeo.com')) return 'vimeo';
+  return 'other';
+};
+
+const buildDefaultTasks = (type) => {
+  const labels = TASK_TEMPLATES[type] || ['Brief', 'Production', 'Montage', 'Livraison'];
+  return labels.map((label, i) => ({ id: 't' + Date.now() + '-' + i, label, done: false, order: i }));
+};
+
+// Copie texte dans le presse-papier (best effort)
+const copyText = async (text) => {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+};
+
+const firstName = (full) => (full || '').split(' ')[0] || '';
+
+// Templates d'emails FR pour les moments-clés du flux monteur ↔ client
+const EMAIL_TEMPLATES = {
+  review: (project, client, deliverable) => ({
+    subject: `${deliverable.label} — ${project.title}`,
+    body: `Salut ${firstName(client?.name)},
+
+Voici ${deliverable.label.toLowerCase()} pour ${project.title} :
+${deliverable.url}
+
+N'hésite pas à me faire un retour quand tu peux, idéalement consolidé en une seule réponse pour gagner du temps des deux côtés.
+
+Belle journée,
+Jesse`
+  }),
+  delivered: (project, client, deliverable) => ({
+    subject: `${project.title} — Livraison`,
+    body: `Salut ${firstName(client?.name)},
+
+Le master de ${project.title} est livré :
+${deliverable.url}
+
+Merci pour la confiance sur ce projet.
+
+À très vite,
+Jesse`
+  }),
+  reminder: (project, client) => ({
+    subject: `${project.title} — Petit point`,
+    body: `Salut ${firstName(client?.name)},
+
+Petit rappel sur ${project.title} : il me faudrait tes retours pour passer à la suite.
+Quand ça t'arrange, mais on est en deadline.
+
+Merci,
+Jesse`
+  }),
+  invoiceReminder: (invoice, project, client) => ({
+    subject: `Relance facture ${invoice.number}`,
+    body: `Bonjour ${firstName(client?.name)},
+
+Je me permets de revenir vers toi concernant la facture ${invoice.number} (${eur(invoice.amount)}) émise le ${fmtDateLong(invoice.issueDate)} et échue le ${fmtDateLong(invoice.dueDate)}, qui semble encore en attente de règlement.
+
+Merci de me confirmer le paiement ou de me signaler tout souci.
+
+Bien cordialement,
+Jesse`
+  })
+};
+
+const buildMailto = (email, { subject, body }) => {
+  const params = new URLSearchParams();
+  if (subject) params.set('subject', subject);
+  if (body) params.set('body', body);
+  // mailto encode espaces en + par URLSearchParams; certains clients préfèrent %20
+  const qs = params.toString().replace(/\+/g, '%20');
+  return `mailto:${email || ''}?${qs}`;
+};
+
+// Duplique un projet : recopie type/budget/notes/tâches mais reset état & dates
+const duplicateProjectData = (project) => ({
+  ...project,
+  id: 'p' + Date.now(),
+  title: project.title + ' (copie)',
+  stage: 'onboarding',
+  startDate: today.toISOString().slice(0, 10),
+  deadline: dateOffset(14),
+  invoicedAmount: 0,
+  paidAmount: 0,
+  tasks: (project.tasks || []).map((t, i) => ({ id: 't' + Date.now() + '-' + i, label: t.label, done: false, order: i })),
+  deliverables: [],
+  revisionHistory: [],
+  createdAt: today.toISOString().slice(0, 10)
+});
+
+// Renvoie la prochaine tâche non cochée d'un projet (pour les vues focus)
+const nextPendingTask = (project) => (project.tasks || []).find(t => !t.done) || null;
+
 // ============ SEED DATA ============
 const today = new Date('2026-04-30');
 const dateOffset = (days) => { const d = new Date(today); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); };
@@ -91,15 +230,74 @@ const seedClients = [
   { id: 'c5', name: 'Sofia Almeida', company: 'Almeida Bijoux', email: 'sofia@almeida-bijoux.com', phone: '+33 7 11 22 33 44', createdAt: '2026-03-28' }
 ];
 
+const _markDone = (tasks, untilLabel) => {
+  const idx = tasks.findIndex(t => t.label === untilLabel);
+  return tasks.map((t, i) => ({ ...t, done: idx >= 0 ? i <= idx : false }));
+};
+
 const seedProjects = [
-  { id: 'p1', clientId: 'c1', title: 'Campagne printemps 2026', type: 'Publicité', stage: 'production', startDate: dateOffset(-12), deadline: dateOffset(8), budget: 8500, invoicedAmount: 4250, paidAmount: 4250, revisions: 0, notes: 'Tournage terminé. En cours d\'étalonnage.', createdAt: dateOffset(-15) },
-  { id: 'p2', clientId: 'c2', title: 'Film corporate annuel', type: 'Corporate', stage: 'review', startDate: dateOffset(-25), deadline: dateOffset(3), budget: 12000, invoicedAmount: 6000, paidAmount: 6000, revisions: 2, notes: 'Deuxième passe envoyée au client. Attente retours sur le chapitre 3.', createdAt: dateOffset(-30) },
-  { id: 'p3', clientId: 'c3', title: 'Série Reels Q2', type: 'Social Media', stage: 'onboarding', startDate: dateOffset(-2), deadline: dateOffset(21), budget: 4200, invoicedAmount: 2100, paidAmount: 0, revisions: 0, notes: 'Brief reçu, kick-off prévu jeudi.', createdAt: dateOffset(-3) },
-  { id: 'p4', clientId: 'c4', title: 'Visite virtuelle Villa Bel-Air', type: 'Corporate', stage: 'validated', startDate: dateOffset(-40), deadline: dateOffset(-2), budget: 3800, invoicedAmount: 3800, paidAmount: 1900, revisions: 1, notes: 'Livré et validé. Solde à facturer.', createdAt: dateOffset(-45) },
-  { id: 'p5', clientId: 'c5', title: 'Lookbook collection été', type: 'Publicité', stage: 'invoicing', startDate: dateOffset(-55), deadline: dateOffset(-10), budget: 6500, invoicedAmount: 6500, paidAmount: 3250, revisions: 3, notes: 'Solde en attente de paiement.', createdAt: dateOffset(-60) },
-  { id: 'p6', clientId: 'c1', title: 'Aftermovie événement clients', type: 'Aftermovie', stage: 'production', startDate: dateOffset(-7), deadline: dateOffset(14), budget: 3200, invoicedAmount: 1600, paidAmount: 1600, revisions: 0, notes: 'Dérushage en cours.', createdAt: dateOffset(-10) },
-  { id: 'p7', clientId: 'c2', title: 'Spot recrutement', type: 'Corporate', stage: 'onboarding', startDate: dateOffset(0), deadline: dateOffset(28), budget: 5500, invoicedAmount: 0, paidAmount: 0, revisions: 0, notes: 'Devis signé hier.', createdAt: dateOffset(-1) }
+  { id: 'p1', clientId: 'c1', title: 'Campagne printemps 2026', type: 'Publicité', stage: 'production', startDate: dateOffset(-12), deadline: dateOffset(8), budget: 8500, invoicedAmount: 4250, paidAmount: 4250, notes: 'Tournage terminé. En cours d\'étalonnage.', createdAt: dateOffset(-15),
+    tasks: _markDone(buildDefaultTasks('Publicité'), 'Cut V1'),
+    deliverables: [{ id: 'd1', kind: 'frameio', label: 'Cut V1 review', url: 'https://app.frame.io/reviews/mock-cut-v1', createdAt: dateOffset(-3) }],
+    revisionHistory: []
+  },
+  { id: 'p2', clientId: 'c2', title: 'Film corporate annuel', type: 'Corporate', stage: 'review', startDate: dateOffset(-25), deadline: dateOffset(3), budget: 12000, invoicedAmount: 6000, paidAmount: 6000, notes: 'Deuxième passe envoyée au client. Attente retours sur le chapitre 3.', createdAt: dateOffset(-30),
+    tasks: _markDone(buildDefaultTasks('Corporate'), 'Voix off'),
+    deliverables: [
+      { id: 'd2', kind: 'frameio', label: 'V1', url: 'https://app.frame.io/reviews/mock-v1', createdAt: dateOffset(-12) },
+      { id: 'd3', kind: 'frameio', label: 'V2', url: 'https://app.frame.io/reviews/mock-v2', createdAt: dateOffset(-4) }
+    ],
+    revisionHistory: [
+      { id: 'r1', round: 1, date: dateOffset(-10), feedback: 'Ajuster le rythme du chapitre 1, ajouter musique sur l\'intro, sous-titres FR.', status: 'addressed' },
+      { id: 'r2', round: 2, date: dateOffset(-3), feedback: 'Chapitre 3 trop long. Couper de 30s. Logo trop tard.', status: 'pending' }
+    ]
+  },
+  { id: 'p3', clientId: 'c3', title: 'Série Reels Q2', type: 'Social Media', stage: 'onboarding', startDate: dateOffset(-2), deadline: dateOffset(21), budget: 4200, invoicedAmount: 2100, paidAmount: 0, notes: 'Brief reçu, kick-off prévu jeudi.', createdAt: dateOffset(-3),
+    tasks: _markDone(buildDefaultTasks('Social Media'), 'Brief'),
+    deliverables: [],
+    revisionHistory: []
+  },
+  { id: 'p4', clientId: 'c4', title: 'Visite virtuelle Villa Bel-Air', type: 'Corporate', stage: 'validated', startDate: dateOffset(-40), deadline: dateOffset(-2), budget: 3800, invoicedAmount: 3800, paidAmount: 1900, notes: 'Livré et validé. Solde à facturer.', createdAt: dateOffset(-45),
+    tasks: buildDefaultTasks('Corporate').map(t => ({ ...t, done: true })),
+    deliverables: [
+      { id: 'd4', kind: 'youtube', label: 'Master final', url: 'https://youtu.be/mock-villa', createdAt: dateOffset(-2) },
+      { id: 'd5', kind: 'drive', label: 'Sources brutes', url: 'https://drive.google.com/mock-sources', createdAt: dateOffset(-2) }
+    ],
+    revisionHistory: [
+      { id: 'r3', round: 1, date: dateOffset(-15), feedback: 'Allonger la séquence de la piscine, ajuster colorimétrie sur l\'extérieur.', status: 'addressed' }
+    ]
+  },
+  { id: 'p5', clientId: 'c5', title: 'Lookbook collection été', type: 'Publicité', stage: 'invoicing', startDate: dateOffset(-55), deadline: dateOffset(-10), budget: 6500, invoicedAmount: 6500, paidAmount: 3250, notes: 'Solde en attente de paiement.', createdAt: dateOffset(-60),
+    tasks: buildDefaultTasks('Publicité').map(t => ({ ...t, done: true })),
+    deliverables: [
+      { id: 'd6', kind: 'vimeo', label: 'Master', url: 'https://vimeo.com/mock-lookbook', createdAt: dateOffset(-12) }
+    ],
+    revisionHistory: [
+      { id: 'r4', round: 1, date: dateOffset(-30), feedback: 'Ajouter transitions plus douces.', status: 'addressed' },
+      { id: 'r5', round: 2, date: dateOffset(-22), feedback: 'Couper la dernière séquence.', status: 'addressed' },
+      { id: 'r6', round: 3, date: dateOffset(-15), feedback: 'Corriger la colorimétrie sur le plan 12.', status: 'addressed' }
+    ]
+  },
+  { id: 'p6', clientId: 'c1', title: 'Aftermovie événement clients', type: 'Aftermovie', stage: 'production', startDate: dateOffset(-7), deadline: dateOffset(14), budget: 3200, invoicedAmount: 1600, paidAmount: 1600, notes: 'Dérushage en cours.', createdAt: dateOffset(-10),
+    tasks: _markDone(buildDefaultTasks('Aftermovie'), 'Dérushage'),
+    deliverables: [],
+    revisionHistory: []
+  },
+  { id: 'p7', clientId: 'c2', title: 'Spot recrutement', type: 'Corporate', stage: 'onboarding', startDate: dateOffset(0), deadline: dateOffset(28), budget: 5500, invoicedAmount: 0, paidAmount: 0, notes: 'Devis signé hier.', createdAt: dateOffset(-1),
+    tasks: buildDefaultTasks('Corporate'),
+    deliverables: [],
+    revisionHistory: []
+  }
 ];
+
+// Migration : projets stockés en localStorage avant ajout des nouveaux champs
+const migrateProject = (p) => ({
+  ...p,
+  tasks: Array.isArray(p.tasks) ? p.tasks : buildDefaultTasks(p.type),
+  deliverables: Array.isArray(p.deliverables) ? p.deliverables : [],
+  revisionHistory: Array.isArray(p.revisionHistory) ? p.revisionHistory : [],
+  hoursLogged: typeof p.hoursLogged === 'number' ? p.hoursLogged : 0
+});
 
 const seedInvoices = [
   { id: 'i1', projectId: 'p1', clientId: 'c1', number: 'JESSE-2026-0042', amount: 4250, status: 'paid', issueDate: dateOffset(-14), dueDate: dateOffset(-7), paidDate: dateOffset(-9), ghlLink: 'https://app.gohighlevel.com/inv/mock-42' },
@@ -128,6 +326,74 @@ const loadStore = () => {
 const saveStore = (data) => {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
   catch (e) { console.error(e); }
+};
+
+// Détecte automatiquement les factures en retard (pending au-delà de la date d'échéance)
+const reconcileInvoiceStatus = (invoices) =>
+  invoices.map(i => (i.status === 'pending' && daysUntil(i.dueDate) < 0) ? { ...i, status: 'overdue' } : i);
+
+// ============ TOAST SYSTEM ============
+const ToastContext = React.createContext(null);
+const useToast = () => React.useContext(ToastContext);
+
+const ToastProvider = ({ children }) => {
+  const [toasts, setToasts] = useState([]);
+  const push = useCallback((message, type = 'success') => {
+    const id = Date.now() + Math.random();
+    setToasts(t => [...t, { id, message, type }]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3500);
+  }, []);
+  return (
+    <ToastContext.Provider value={push}>
+      {children}
+      <div className="fixed bottom-6 right-6 z-[100] space-y-2 pointer-events-none">
+        {toasts.map(t => {
+          const map = {
+            success: { bg: 'bg-emerald-500/15', border: 'border-emerald-500/40', text: 'text-emerald-200', icon: CheckCircle2 },
+            error: { bg: 'bg-rose-500/15', border: 'border-rose-500/40', text: 'text-rose-200', icon: AlertCircle },
+            info: { bg: 'bg-sky-500/15', border: 'border-sky-500/40', text: 'text-sky-200', icon: Sparkles }
+          };
+          const c = map[t.type] || map.success;
+          const Icon = c.icon;
+          return (
+            <div key={t.id} className={`${c.bg} ${c.border} ${c.text} backdrop-blur-md border rounded-lg px-4 py-3 shadow-lg flex items-center gap-2.5 animate-in pointer-events-auto min-w-[220px]`}>
+              <Icon className="w-4 h-4 flex-shrink-0" />
+              <span className="text-sm font-body">{t.message}</span>
+            </div>
+          );
+        })}
+      </div>
+    </ToastContext.Provider>
+  );
+};
+
+// ============ CONFIRM MODAL ============
+const ConfirmModal = ({ open, title, message, confirmLabel = 'Confirmer', danger = false, onConfirm, onCancel }) => {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onCancel}>
+      <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+        <div className="p-5">
+          <h3 className="font-display text-xl text-zinc-100 mb-2">{title}</h3>
+          <p className="text-sm text-zinc-400 font-body">{message}</p>
+        </div>
+        <div className="p-5 pt-0 flex justify-end gap-2">
+          <button onClick={onCancel} className="text-sm px-4 py-2 text-zinc-400 hover:text-zinc-100 font-body">Annuler</button>
+          <button onClick={onConfirm} className={`text-sm px-4 py-2 font-medium rounded-lg ${danger ? 'bg-rose-500 hover:bg-rose-400 text-zinc-50' : 'bg-amber-500 hover:bg-amber-400 text-zinc-950'}`}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ MODAL SHELL (gère ESC) ============
+const useEscape = (active, handler) => {
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e) => { if (e.key === 'Escape') handler(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [active, handler]);
 };
 
 // ============ COMPONENTS ============
@@ -167,6 +433,247 @@ const KPICard = ({ label, value, sub, accent = 'amber', icon: Icon }) => (
     {sub && <div className="text-xs text-zinc-500 font-body">{sub}</div>}
   </div>
 );
+
+// ============ SEARCH HELPER ============
+const matchesQuery = (q, ...fields) => {
+  if (!q) return true;
+  const needle = q.toLowerCase().trim();
+  return fields.some(f => (f || '').toString().toLowerCase().includes(needle));
+};
+
+// ============ TODAY (FOCUS) VIEW ============
+const TodayView = ({ projects, invoices, clients, onSelectProject, onUpdateProject, onUpdateInvoice, onNavigate }) => {
+  const toast = useToast();
+  const hour = today.getHours();
+  const greet = hour < 5 ? 'Bonne nuit' : hour < 12 ? 'Bonjour' : hour < 18 ? 'Bon après-midi' : 'Bonsoir';
+
+  const overdueInvoices = invoices.filter(i => i.status === 'overdue');
+  const pendingRevisions = projects
+    .flatMap(p => (p.revisionHistory || []).filter(r => r.status === 'pending').map(r => ({ project: p, revision: r })))
+    .sort((a, b) => new Date(a.revision.date) - new Date(b.revision.date));
+  const urgentDeadlines = projects
+    .filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) <= 3)
+    .sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+  const activeWithNextTask = projects
+    .filter(p => p.stage !== 'invoicing' && p.stage !== 'validated' && nextPendingTask(p))
+    .sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+
+  const total = overdueInvoices.length + pendingRevisions.length + urgentDeadlines.length;
+
+  const tickNextTask = (project) => {
+    const next = nextPendingTask(project);
+    if (!next) return;
+    const tasks = (project.tasks || []).map(t => t.id === next.id ? { ...t, done: true } : t);
+    onUpdateProject({ ...project, tasks });
+    toast?.(`✓ ${next.label}`);
+  };
+  const logHour = (project) => {
+    const next = Math.round(((project.hoursLogged || 0) + 1) * 2) / 2;
+    onUpdateProject({ ...project, hoursLogged: next });
+    toast?.(`+1h · ${project.title} (${next}h)`, 'info');
+  };
+
+  const sendInvoiceReminder = (inv) => {
+    const client = clients.find(c => c.id === inv.clientId);
+    const project = projects.find(p => p.id === inv.projectId);
+    const tpl = EMAIL_TEMPLATES.invoiceReminder(inv, project, client);
+    if (!client?.email) {
+      copyText(`${tpl.subject}\n\n${tpl.body}`).then(ok => toast?.(ok ? 'Email copié (pas d\'adresse client)' : 'Erreur', ok ? 'info' : 'error'));
+      return;
+    }
+    window.location.href = buildMailto(client.email, tpl);
+  };
+
+  return (
+    <div className="space-y-6 animate-in">
+      <div className="flex items-end justify-between flex-wrap gap-4">
+        <div>
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-2 flex items-center gap-2">
+            <Sun className="w-3 h-3" />
+            {today.toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
+          </div>
+          <h1 className="font-display text-4xl text-zinc-100 tracking-tight">{greet}.</h1>
+          <p className="text-sm text-zinc-500 mt-1 font-body">
+            {total === 0
+              ? 'Tout est sous contrôle. Profite ☕️'
+              : `${total} chose${total > 1 ? 's' : ''} qui demande${total > 1 ? 'nt' : ''} ton attention`}
+          </p>
+        </div>
+      </div>
+
+      {/* Révisions à traiter — la priorité absolue d'un monteur */}
+      {pendingRevisions.length > 0 && (
+        <section className="bg-violet-500/5 border border-violet-500/20 rounded-xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-violet-500/20 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-4 h-4 text-violet-300" />
+              <h2 className="font-display text-lg text-violet-200">Retours client à traiter</h2>
+            </div>
+            <span className="text-xs font-mono text-violet-300/70">{pendingRevisions.length}</span>
+          </div>
+          <div className="divide-y divide-violet-500/10">
+            {pendingRevisions.map(({ project, revision }) => {
+              const c = clients.find(cl => cl.id === project.clientId);
+              return (
+                <button key={revision.id} onClick={() => onSelectProject(project)} className="w-full text-left p-4 hover:bg-violet-500/5 transition-colors group">
+                  <div className="flex items-start gap-3">
+                    <span className="px-2 py-0.5 bg-violet-500/15 text-violet-300 rounded-full text-[10px] font-mono whitespace-nowrap">Round {revision.round}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm text-zinc-100 font-medium truncate">{project.title}</span>
+                        <span className="text-xs text-zinc-500 font-mono">{c?.company}</span>
+                      </div>
+                      <div className="text-sm text-zinc-300 font-body line-clamp-2">{revision.feedback}</div>
+                      <div className="text-[10px] text-zinc-600 font-mono mt-1">{fmtDate(revision.date)}</div>
+                    </div>
+                    <ArrowRight className="w-4 h-4 text-violet-400/50 group-hover:text-violet-300 mt-1 flex-shrink-0" />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Tâches en cours par projet actif */}
+      {activeWithNextTask.length > 0 && (
+        <section className="bg-zinc-900/40 border border-zinc-800 rounded-xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-zinc-800 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-amber-300" />
+              <h2 className="font-display text-lg text-zinc-100">Prochaines tâches</h2>
+            </div>
+            <span className="text-xs font-mono text-zinc-500">{activeWithNextTask.length} projet{activeWithNextTask.length > 1 ? 's' : ''}</span>
+          </div>
+          <div className="divide-y divide-zinc-800/60">
+            {activeWithNextTask.map(p => {
+              const next = nextPendingTask(p);
+              const c = clients.find(cl => cl.id === p.clientId);
+              const days = daysUntil(p.deadline);
+              const overdue = days < 0;
+              const urgent = days >= 0 && days <= 3;
+              const totalT = (p.tasks || []).length;
+              const doneT = (p.tasks || []).filter(t => t.done).length;
+              return (
+                <div key={p.id} className="flex items-center gap-3 p-4 hover:bg-zinc-900/40 transition-colors group">
+                  <button
+                    onClick={() => tickNextTask(p)}
+                    title="Cocher cette tâche"
+                    className="w-5 h-5 rounded border-2 border-zinc-600 hover:border-emerald-400 hover:bg-emerald-500/20 transition-colors flex items-center justify-center flex-shrink-0"
+                  >
+                    <Check className="w-3 h-3 text-transparent group-hover:text-emerald-400 transition-colors" />
+                  </button>
+                  <button onClick={() => onSelectProject(p)} className="flex-1 min-w-0 text-left">
+                    <div className="text-sm text-zinc-100 font-medium truncate">{next.label}</div>
+                    <div className="text-xs text-zinc-500 font-body truncate">
+                      <span className="text-zinc-400">{p.title}</span>
+                      <span className="mx-1.5 text-zinc-700">·</span>
+                      {c?.company}
+                      <span className="mx-1.5 text-zinc-700">·</span>
+                      <span className="font-mono">{doneT}/{totalT}</span>
+                      {(p.hoursLogged || 0) > 0 && <><span className="mx-1.5 text-zinc-700">·</span><span className="font-mono">{p.hoursLogged}h</span></>}
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => logHour(p)}
+                    title="Logger 1 heure"
+                    className="text-[10px] text-amber-300 hover:text-amber-200 px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded font-mono transition-colors flex-shrink-0"
+                  >
+                    +1h
+                  </button>
+                  <div className="text-right flex-shrink-0 min-w-[3rem]">
+                    <div className={`text-xs font-mono ${overdue ? 'text-rose-400' : urgent ? 'text-amber-400' : 'text-zinc-500'}`}>
+                      {overdue ? `J+${Math.abs(days)}` : days === 0 ? "Auj." : `J-${days}`}
+                    </div>
+                    <div className="text-[10px] text-zinc-600 font-mono">{fmtDate(p.deadline)}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Deadlines urgentes (incluant aujourd'hui & passées non-archivées) */}
+      {urgentDeadlines.length > 0 && (
+        <section className="bg-amber-500/5 border border-amber-500/20 rounded-xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-amber-500/20 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Clock className="w-4 h-4 text-amber-300" />
+              <h2 className="font-display text-lg text-amber-200">Échéances chaudes</h2>
+            </div>
+            <span className="text-xs font-mono text-amber-300/70">{urgentDeadlines.length}</span>
+          </div>
+          <div className="divide-y divide-amber-500/10">
+            {urgentDeadlines.map(p => {
+              const c = clients.find(cl => cl.id === p.clientId);
+              const days = daysUntil(p.deadline);
+              const overdue = days < 0;
+              return (
+                <button key={p.id} onClick={() => onSelectProject(p)} className="w-full text-left p-4 hover:bg-amber-500/5 transition-colors group flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="text-sm text-zinc-100 font-medium truncate">{p.title}</span>
+                      <StagePill stage={p.stage} />
+                    </div>
+                    <div className="text-xs text-zinc-500 font-body">{c?.company} · {p.type}</div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className={`font-mono text-sm ${overdue ? 'text-rose-400' : 'text-amber-400'}`}>{fmtDate(p.deadline)}</div>
+                    <div className="text-xs text-zinc-500 font-mono">{overdue ? `J+${Math.abs(days)} retard` : days === 0 ? "aujourd'hui" : `J-${days}`}</div>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-amber-400/50 group-hover:text-amber-300 flex-shrink-0" />
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Factures en retard */}
+      {overdueInvoices.length > 0 && (
+        <section className="bg-rose-500/5 border border-rose-500/20 rounded-xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-rose-500/20 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-300" />
+              <h2 className="font-display text-lg text-rose-200">Factures à relancer</h2>
+            </div>
+            <span className="text-xs font-mono text-rose-300/70">{eur(overdueInvoices.reduce((s, i) => s + i.amount, 0))}</span>
+          </div>
+          <div className="divide-y divide-rose-500/10">
+            {overdueInvoices.map(inv => {
+              const c = clients.find(cl => cl.id === inv.clientId);
+              return (
+                <div key={inv.id} className="flex items-center gap-3 p-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-zinc-100 font-medium truncate">{c?.company} · {inv.number}</div>
+                    <div className="text-xs text-zinc-500 font-mono">Échue {fmtDate(inv.dueDate)} · J+{Math.abs(daysUntil(inv.dueDate))}</div>
+                  </div>
+                  <div className="font-mono text-sm text-rose-300 flex-shrink-0">{eur(inv.amount)}</div>
+                  <button onClick={() => sendInvoiceReminder(inv)} className="text-xs text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 px-2 py-1 rounded inline-flex items-center gap-1 font-body transition-colors flex-shrink-0">
+                    <Send className="w-3 h-3" /> Relancer
+                  </button>
+                  <button onClick={() => onUpdateInvoice(inv.id, { status: 'paid', paidDate: today.toISOString().slice(0, 10) })} className="text-xs text-emerald-400 hover:text-emerald-300 font-body whitespace-nowrap flex-shrink-0">
+                    <Check className="w-3 h-3 inline" /> Payée
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {total === 0 && activeWithNextTask.length === 0 && (
+        <div className="bg-zinc-900/40 border border-zinc-800 border-dashed rounded-xl p-12 text-center">
+          <CheckCircle2 className="w-10 h-10 text-emerald-500/60 mx-auto mb-3" />
+          <div className="font-display text-2xl text-zinc-100 mb-1">Inbox zéro 🎬</div>
+          <div className="text-sm text-zinc-500 font-body">Aucune révision en attente, aucune deadline urgente, aucune facture en retard.</div>
+          <button onClick={() => onNavigate('projects')} className="mt-4 text-sm text-amber-400 hover:text-amber-300 font-body">Voir le pipeline →</button>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // ============ DASHBOARD VIEW ============
 const DashboardView = ({ projects, invoices, clients, onSelectProject, onNewProject }) => {
@@ -272,7 +779,7 @@ const DashboardView = ({ projects, invoices, clients, onSelectProject, onNewProj
                   </div>
                   <div className="text-right">
                     <div className={`font-mono text-sm ${overdue ? 'text-rose-400' : urgent ? 'text-amber-400' : 'text-zinc-300'}`}>{fmtDate(p.deadline)}</div>
-                    <div className="text-xs text-zinc-500 font-mono">{overdue ? `J${days}` : days === 0 ? "aujourd'hui" : `J-${days}`}</div>
+                    <div className="text-xs text-zinc-500 font-mono">{overdue ? `J+${Math.abs(days)}` : days === 0 ? "aujourd'hui" : `J-${days}`}</div>
                   </div>
                   <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 transition-colors" />
                 </button>
@@ -302,9 +809,15 @@ const DashboardView = ({ projects, invoices, clients, onSelectProject, onNewProj
 };
 
 // ============ PROJECTS VIEW (KANBAN) ============
-const ProjectsView = ({ projects, clients, onSelectProject, onNewProject }) => {
+const ProjectsView = ({ projects, clients, onSelectProject, onNewProject, searchQuery, onMoveStage }) => {
   const [filterClient, setFilterClient] = useState('all');
-  const filtered = projects.filter(p => filterClient === 'all' || p.clientId === filterClient);
+  const [dragId, setDragId] = useState(null);
+  const [dragOver, setDragOver] = useState(null);
+  const filtered = projects.filter(p => {
+    if (filterClient !== 'all' && p.clientId !== filterClient) return false;
+    const client = clients.find(c => c.id === p.clientId);
+    return matchesQuery(searchQuery, p.title, p.type, p.notes, client?.company, client?.name);
+  });
 
   return (
     <div className="space-y-6 animate-in">
@@ -328,9 +841,21 @@ const ProjectsView = ({ projects, clients, onSelectProject, onNewProject }) => {
         {STAGES.map(stage => {
           const c = STAGE_COLORS[stage.color];
           const stageProjects = filtered.filter(p => p.stage === stage.id);
+          const isOver = dragOver === stage.id;
           return (
-            <div key={stage.id} className="flex flex-col">
-              <div className={`${c.bg} ${c.border} border rounded-lg px-3 py-2.5 mb-3`}>
+            <div
+              key={stage.id}
+              className="flex flex-col"
+              onDragOver={e => { e.preventDefault(); setDragOver(stage.id); }}
+              onDragLeave={() => setDragOver(prev => prev === stage.id ? null : prev)}
+              onDrop={e => {
+                e.preventDefault();
+                if (dragId) onMoveStage(dragId, stage.id);
+                setDragId(null);
+                setDragOver(null);
+              }}
+            >
+              <div className={`${c.bg} ${c.border} border rounded-lg px-3 py-2.5 mb-3 ${isOver ? 'ring-2 ring-amber-400/60' : ''}`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className={`w-2 h-2 rounded-full ${c.dot}`}></span>
@@ -339,37 +864,68 @@ const ProjectsView = ({ projects, clients, onSelectProject, onNewProject }) => {
                   <span className="font-mono text-xs text-zinc-500">{stageProjects.length}</span>
                 </div>
               </div>
-              <div className="flex-1 space-y-2">
+              <div className={`flex-1 space-y-2 rounded-lg p-1 transition-colors ${isOver ? 'bg-zinc-800/40' : ''}`}>
                 {stageProjects.map(p => {
                   const client = clients.find(cl => cl.id === p.clientId);
                   const days = daysUntil(p.deadline);
                   const urgent = days <= 3 && days >= 0 && p.stage !== 'invoicing';
                   const overdue = days < 0 && p.stage !== 'invoicing';
                   return (
-                    <button key={p.id} onClick={() => onSelectProject(p)} className="w-full text-left bg-zinc-900/80 border border-zinc-800 rounded-lg p-3 hover:border-zinc-600 transition-all group">
-                      <div className="text-xs text-zinc-500 font-body mb-1 truncate">{client?.company}</div>
-                      <div className="text-sm text-zinc-100 font-medium mb-3 leading-snug">{p.title}</div>
-                      <div className="flex items-center justify-between text-xs">
-                        <div className={`flex items-center gap-1 font-mono ${overdue ? 'text-rose-400' : urgent ? 'text-amber-400' : 'text-zinc-500'}`}>
-                          <Clock className="w-3 h-3" />
-                          {fmtDate(p.deadline)}
+                    <div
+                      key={p.id}
+                      draggable
+                      onDragStart={() => setDragId(p.id)}
+                      onDragEnd={() => { setDragId(null); setDragOver(null); }}
+                      className={`bg-zinc-900/80 border border-zinc-800 rounded-lg p-3 hover:border-zinc-600 transition-all group cursor-grab active:cursor-grabbing ${dragId === p.id ? 'opacity-40' : ''}`}
+                    >
+                      <button onClick={() => onSelectProject(p)} className="w-full text-left">
+                        <div className="text-xs text-zinc-500 font-body mb-1 truncate">{client?.company}</div>
+                        <div className="text-sm text-zinc-100 font-medium mb-2 leading-snug">{p.title}</div>
+                        {(() => {
+                          const tasks = p.tasks || [];
+                          const done = tasks.filter(t => t.done).length;
+                          const pct = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
+                          if (tasks.length === 0) return null;
+                          return (
+                            <div className="mb-2">
+                              <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500 mb-1">
+                                <span>{done}/{tasks.length} tâches</span>
+                                <span>{pct}%</span>
+                              </div>
+                              <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+                                <div className={`h-full ${pct === 100 ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${pct}%` }}></div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                        <div className="flex items-center justify-between text-xs">
+                          <div className={`flex items-center gap-1 font-mono ${overdue ? 'text-rose-400' : urgent ? 'text-amber-400' : 'text-zinc-500'}`}>
+                            <Clock className="w-3 h-3" />
+                            {fmtDate(p.deadline)}
+                          </div>
+                          <div className="font-mono text-zinc-400">{eur(p.budget)}</div>
                         </div>
-                        <div className="font-mono text-zinc-400">{eur(p.budget)}</div>
-                      </div>
-                      {p.revisions > 0 && (
-                        <div className="mt-2 text-xs text-violet-400 font-mono">⟲ {p.revisions} révision{p.revisions > 1 ? 's' : ''}</div>
-                      )}
-                    </button>
+                        <div className="flex items-center gap-2 mt-2 text-[10px] font-mono">
+                          {(p.hoursLogged || 0) > 0 && (
+                            <span className="text-zinc-500">⏱ {p.hoursLogged}h</span>
+                          )}
+                          {(p.revisionHistory?.length || 0) > 0 && (
+                            <span className="text-violet-400">⟲ {p.revisionHistory.length} rév.</span>
+                          )}
+                        </div>
+                      </button>
+                    </div>
                   );
                 })}
                 {stageProjects.length === 0 && (
-                  <div className="text-xs text-zinc-600 text-center py-6 font-body italic">Vide</div>
+                  <div className="text-xs text-zinc-600 text-center py-6 font-body italic">{searchQuery ? 'Aucun résultat' : 'Vide'}</div>
                 )}
               </div>
             </div>
           );
         })}
       </div>
+      <div className="text-xs text-zinc-600 font-body italic">💡 Glisser-déposer pour changer l'étape.</div>
     </div>
   );
 };
@@ -497,9 +1053,35 @@ const CalendarView = ({ projects, clients, invoices, onSelectProject }) => {
 };
 
 // ============ INVOICES VIEW ============
-const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoice }) => {
+const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoice, onDeleteInvoice, searchQuery, disableNew }) => {
   const [filter, setFilter] = useState('all');
-  const filtered = invoices.filter(i => filter === 'all' || i.status === filter).sort((a, b) => new Date(b.issueDate) - new Date(a.issueDate));
+  const filtered = invoices
+    .filter(i => filter === 'all' || i.status === filter)
+    .filter(i => {
+      const client = clients.find(c => c.id === i.clientId);
+      const project = projects.find(p => p.id === i.projectId);
+      return matchesQuery(searchQuery, i.number, client?.company, client?.name, project?.title);
+    })
+    .sort((a, b) => new Date(b.issueDate) - new Date(a.issueDate));
+
+  const exportCSV = () => {
+    const rows = [
+      ['N°', 'Client', 'Projet', 'Émise', 'Échéance', 'Montant', 'Statut', 'Payée le']
+    ];
+    invoices.forEach(inv => {
+      const client = clients.find(c => c.id === inv.clientId);
+      const project = projects.find(p => p.id === inv.projectId);
+      rows.push([inv.number, client?.company || '', project?.title || '', inv.issueDate, inv.dueDate, inv.amount, inv.status, inv.paidDate || '']);
+    });
+    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `factures-jesse-${today.toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   const totalInvoiced = invoices.reduce((s, i) => s + i.amount, 0);
   const totalPaid = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.amount, 0);
@@ -513,9 +1095,14 @@ const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoi
           <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-2">Facturation</div>
           <h1 className="font-display text-4xl text-zinc-100 tracking-tight">Factures</h1>
         </div>
-        <button onClick={onNewInvoice} className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium text-sm px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
-          <Plus className="w-4 h-4" /> Nouvelle facture
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={exportCSV} disabled={invoices.length === 0} className="text-sm border border-zinc-800 text-zinc-300 hover:text-zinc-100 hover:border-zinc-600 disabled:opacity-40 disabled:cursor-not-allowed px-3 py-2 rounded-lg flex items-center gap-2 font-body transition-colors">
+            <Download className="w-4 h-4" /> Export CSV
+          </button>
+          <button onClick={onNewInvoice} disabled={disableNew} title={disableNew ? 'Créez d\'abord un projet' : ''} className="bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-950 font-medium text-sm px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
+            <Plus className="w-4 h-4" /> Nouvelle facture
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-4 gap-4">
@@ -567,17 +1154,22 @@ const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoi
                     </a>
                   </td>
                   <td className="px-4 py-3">
-                    {inv.status !== 'paid' && (
-                      <button onClick={() => onUpdateInvoice(inv.id, { status: 'paid', paidDate: today.toISOString().slice(0, 10) })} className="text-xs text-emerald-400 hover:text-emerald-300 font-medium font-body whitespace-nowrap">
-                        Marquer payée
+                    <div className="flex items-center gap-2 justify-end">
+                      {inv.status !== 'paid' && (
+                        <button onClick={() => onUpdateInvoice(inv.id, { status: 'paid', paidDate: today.toISOString().slice(0, 10) })} className="text-xs text-emerald-400 hover:text-emerald-300 font-medium font-body whitespace-nowrap">
+                          Marquer payée
+                        </button>
+                      )}
+                      <button onClick={() => onDeleteInvoice(inv)} className="text-zinc-500 hover:text-rose-400 transition-colors" title="Supprimer">
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
-                    )}
+                    </div>
                   </td>
                 </tr>
               );
             })}
             {filtered.length === 0 && (
-              <tr><td colSpan="9" className="px-4 py-12 text-center text-zinc-500 text-sm">Aucune facture.</td></tr>
+              <tr><td colSpan="9" className="px-4 py-12 text-center text-zinc-500 text-sm">{searchQuery ? 'Aucune facture ne correspond à la recherche.' : 'Aucune facture.'}</td></tr>
             )}
           </tbody>
         </table>
@@ -591,72 +1183,409 @@ const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoi
 };
 
 // ============ CLIENTS VIEW ============
-const ClientsView = ({ clients, projects, invoices, onNewClient }) => (
-  <div className="space-y-6 animate-in">
-    <div className="flex items-end justify-between">
-      <div>
-        <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-2">Clients</div>
-        <h1 className="font-display text-4xl text-zinc-100 tracking-tight">Carnet</h1>
+const ClientsView = ({ clients, projects, invoices, onNewClient, onSelectClient, searchQuery }) => {
+  const filtered = clients.filter(c => matchesQuery(searchQuery, c.company, c.name, c.email, c.phone));
+  return (
+    <div className="space-y-6 animate-in">
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-2">Clients</div>
+          <h1 className="font-display text-4xl text-zinc-100 tracking-tight">Carnet</h1>
+        </div>
+        <button onClick={onNewClient} className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium text-sm px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
+          <Plus className="w-4 h-4" /> Nouveau client
+        </button>
       </div>
-      <button onClick={onNewClient} className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium text-sm px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
-        <Plus className="w-4 h-4" /> Nouveau client
-      </button>
-    </div>
 
-    <div className="grid grid-cols-3 gap-4">
-      {clients.map(c => {
-        const clientProjects = projects.filter(p => p.clientId === c.id);
-        const clientInvoices = invoices.filter(i => i.clientId === c.id);
-        const totalRevenue = clientInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.amount, 0);
-        const pending = clientInvoices.filter(i => i.status !== 'paid').reduce((s, i) => s + i.amount, 0);
-        return (
-          <div key={c.id} className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5 hover:border-zinc-700 transition-colors">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <div className="font-display text-xl text-zinc-100">{c.company}</div>
-                <div className="text-sm text-zinc-400 font-body">{c.name}</div>
+      {filtered.length === 0 && (
+        <div className="bg-zinc-900/40 border border-zinc-800/80 border-dashed rounded-xl p-12 text-center">
+          <Inbox className="w-8 h-8 text-zinc-700 mx-auto mb-3" />
+          <div className="text-sm text-zinc-500 font-body">{searchQuery ? 'Aucun client ne correspond à la recherche.' : 'Aucun client. Commencez par en créer un.'}</div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-3 gap-4">
+        {filtered.map(c => {
+          const clientProjects = projects.filter(p => p.clientId === c.id);
+          const clientInvoices = invoices.filter(i => i.clientId === c.id);
+          const totalRevenue = clientInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.amount, 0);
+          const pending = clientInvoices.filter(i => i.status !== 'paid').reduce((s, i) => s + i.amount, 0);
+          return (
+            <button key={c.id} onClick={() => onSelectClient(c)} className="text-left bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5 hover:border-zinc-600 transition-colors">
+              <div className="flex items-start justify-between mb-4">
+                <div className="min-w-0 flex-1">
+                  <div className="font-display text-xl text-zinc-100 truncate">{c.company}</div>
+                  <div className="text-sm text-zinc-400 font-body truncate">{c.name}</div>
+                </div>
+                <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center font-display text-amber-400 flex-shrink-0">
+                  {c.company.charAt(0).toUpperCase()}
+                </div>
               </div>
-              <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center font-display text-amber-400">
-                {c.company.charAt(0)}
+              <div className="space-y-1 text-xs text-zinc-500 font-mono mb-4">
+                <div className="truncate">{c.email || '—'}</div>
+                <div>{c.phone || '—'}</div>
               </div>
-            </div>
-            <div className="space-y-1 text-xs text-zinc-500 font-mono mb-4">
-              <div>{c.email}</div>
-              <div>{c.phone}</div>
-            </div>
-            <div className="grid grid-cols-3 gap-2 pt-4 border-t border-zinc-800">
-              <div>
-                <div className="text-xs text-zinc-500 font-mono">Projets</div>
-                <div className="font-display text-lg text-zinc-100">{clientProjects.length}</div>
+              <div className="grid grid-cols-3 gap-2 pt-4 border-t border-zinc-800">
+                <div>
+                  <div className="text-xs text-zinc-500 font-mono">Projets</div>
+                  <div className="font-display text-lg text-zinc-100">{clientProjects.length}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-zinc-500 font-mono">Encaissé</div>
+                  <div className="font-display text-lg text-emerald-400">{eur(totalRevenue)}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-zinc-500 font-mono">En attente</div>
+                  <div className="font-display text-lg text-amber-400">{eur(pending)}</div>
+                </div>
               </div>
-              <div>
-                <div className="text-xs text-zinc-500 font-mono">Encaissé</div>
-                <div className="font-display text-lg text-emerald-400">{eur(totalRevenue)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-zinc-500 font-mono">En attente</div>
-                <div className="font-display text-lg text-amber-400">{eur(pending)}</div>
-              </div>
-            </div>
-          </div>
-        );
-      })}
+            </button>
+          );
+        })}
+      </div>
     </div>
-  </div>
-);
+  );
+};
+
+// ============ PROJECT TASKS ============
+const ProjectTasks = ({ project, onUpdate }) => {
+  const [newLabel, setNewLabel] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editLabel, setEditLabel] = useState('');
+  const tasks = project.tasks || [];
+  const done = tasks.filter(t => t.done).length;
+  const pct = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
+
+  const toggle = (id) => {
+    onUpdate({ ...project, tasks: tasks.map(t => t.id === id ? { ...t, done: !t.done } : t) });
+  };
+  const addTask = () => {
+    if (!newLabel.trim()) return;
+    const newTask = { id: 't' + Date.now(), label: newLabel.trim(), done: false, order: tasks.length };
+    onUpdate({ ...project, tasks: [...tasks, newTask] });
+    setNewLabel('');
+  };
+  const removeTask = (id) => {
+    onUpdate({ ...project, tasks: tasks.filter(t => t.id !== id) });
+  };
+  const saveEdit = (id) => {
+    if (!editLabel.trim()) { setEditingId(null); return; }
+    onUpdate({ ...project, tasks: tasks.map(t => t.id === id ? { ...t, label: editLabel.trim() } : t) });
+    setEditingId(null);
+  };
+  const resetTemplate = () => {
+    onUpdate({ ...project, tasks: buildDefaultTasks(project.type) });
+  };
+
+  return (
+    <div className="p-5 border-t border-zinc-800">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <ListTodo className="w-3.5 h-3.5 text-zinc-500" />
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono">Tâches</div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-mono text-zinc-500">{done}/{tasks.length}</span>
+          {tasks.length === 0 && (
+            <button onClick={resetTemplate} className="text-xs text-amber-400 hover:text-amber-300 font-body">Charger le modèle {project.type}</button>
+          )}
+        </div>
+      </div>
+      {tasks.length > 0 && (
+        <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden mb-3">
+          <div className={`h-full transition-all ${pct === 100 ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${pct}%` }}></div>
+        </div>
+      )}
+      <div className="space-y-1">
+        {tasks.map(task => (
+          <div key={task.id} className="flex items-center gap-2 group py-1">
+            <button onClick={() => toggle(task.id)} className={`flex-shrink-0 ${task.done ? 'text-emerald-400' : 'text-zinc-600 hover:text-zinc-400'}`}>
+              {task.done ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+            </button>
+            {editingId === task.id ? (
+              <input
+                autoFocus
+                value={editLabel}
+                onChange={e => setEditLabel(e.target.value)}
+                onBlur={() => saveEdit(task.id)}
+                onKeyDown={e => { if (e.key === 'Enter') saveEdit(task.id); if (e.key === 'Escape') setEditingId(null); }}
+                className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-sm text-zinc-200 font-body"
+              />
+            ) : (
+              <button
+                onClick={() => { setEditingId(task.id); setEditLabel(task.label); }}
+                className={`flex-1 text-left text-sm font-body ${task.done ? 'text-zinc-500 line-through' : 'text-zinc-200'}`}
+              >
+                {task.label}
+              </button>
+            )}
+            <button onClick={() => removeTask(task.id)} className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-rose-400 transition-opacity">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-2 mt-3">
+        <input
+          value={newLabel}
+          onChange={e => setNewLabel(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') addTask(); }}
+          placeholder="Ajouter une tâche…"
+          className="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-sm text-zinc-200 font-body focus:border-zinc-600 focus:outline-none"
+        />
+        <button onClick={addTask} disabled={!newLabel.trim()} className="text-xs px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-200 rounded-lg font-body">+ Ajouter</button>
+      </div>
+    </div>
+  );
+};
+
+// ============ PROJECT DELIVERABLES ============
+const ProjectDeliverables = ({ project, client, onUpdate }) => {
+  const [showAdd, setShowAdd] = useState(false);
+  const [draft, setDraft] = useState({ url: '', label: '', kind: 'frameio' });
+  const deliverables = project.deliverables || [];
+  const toast = useToast();
+
+  const submit = () => {
+    if (!draft.url.trim()) return;
+    const kind = draft.kind === 'auto' ? guessKind(draft.url) : draft.kind;
+    const item = { id: 'd' + Date.now(), kind, label: draft.label.trim() || DELIVERABLE_KINDS[kind].label, url: draft.url.trim(), createdAt: today.toISOString().slice(0, 10) };
+    onUpdate({ ...project, deliverables: [...deliverables, item] });
+    setDraft({ url: '', label: '', kind: 'frameio' });
+    setShowAdd(false);
+  };
+  const remove = (id) => {
+    onUpdate({ ...project, deliverables: deliverables.filter(d => d.id !== id) });
+  };
+  const copyUrl = async (url) => {
+    const ok = await copyText(url);
+    toast?.(ok ? 'Lien copié' : 'Copie impossible', ok ? 'success' : 'error');
+  };
+  const sendMail = (template, deliverable) => {
+    const tpl = EMAIL_TEMPLATES[template](project, client, deliverable);
+    if (!client?.email) {
+      // Fallback : copier le contenu si pas d'email client
+      copyText(`${tpl.subject}\n\n${tpl.body}`).then(ok => toast?.(ok ? 'Email copié (pas d\'adresse client)' : 'Erreur copie', ok ? 'info' : 'error'));
+      return;
+    }
+    window.location.href = buildMailto(client.email, tpl);
+  };
+
+  return (
+    <div className="p-5 border-t border-zinc-800">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Link2 className="w-3.5 h-3.5 text-zinc-500" />
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono">Livrables</div>
+        </div>
+        <button onClick={() => setShowAdd(v => !v)} className="text-xs text-amber-400 hover:text-amber-300 font-body inline-flex items-center gap-1">
+          {showAdd ? <X className="w-3 h-3" /> : <Plus className="w-3 h-3" />}{showAdd ? 'Annuler' : 'Ajouter un lien'}
+        </button>
+      </div>
+
+      {showAdd && (
+        <div className="mb-3 p-3 bg-zinc-900/60 border border-zinc-800 rounded-lg space-y-2">
+          <input
+            autoFocus
+            value={draft.url}
+            onChange={e => setDraft({ ...draft, url: e.target.value, kind: guessKind(e.target.value) })}
+            placeholder="https://app.frame.io/…"
+            className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 font-mono"
+          />
+          <div className="flex items-center gap-2">
+            <input
+              value={draft.label}
+              onChange={e => setDraft({ ...draft, label: e.target.value })}
+              placeholder="Label (Cut V1, Master, Sources…)"
+              className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 font-body"
+            />
+            <select value={draft.kind} onChange={e => setDraft({ ...draft, kind: e.target.value })} className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 font-body">
+              {Object.entries(DELIVERABLE_KINDS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
+            <button onClick={submit} disabled={!draft.url.trim()} className="text-xs px-3 py-1.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-950 rounded-lg font-medium">Ajouter</button>
+          </div>
+        </div>
+      )}
+
+      {deliverables.length === 0 && !showAdd && (
+        <div className="text-sm text-zinc-600 italic font-body">Aucun livrable. Ajoute un lien Frame.io, Drive, WeTransfer…</div>
+      )}
+
+      <div className="space-y-2">
+        {deliverables.map(d => {
+          const meta = DELIVERABLE_KINDS[d.kind] || DELIVERABLE_KINDS.other;
+          const Icon = meta.icon;
+          return (
+            <div key={d.id} className={`group p-3 ${meta.bg} ${meta.border} border rounded-lg`}>
+              <div className="flex items-center gap-3">
+                <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${meta.bg} border ${meta.border} flex-shrink-0`}>
+                  <Icon className={`w-4 h-4 ${meta.color}`} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm text-zinc-200 font-medium truncate">{d.label}</span>
+                    <span className={`text-[10px] font-mono uppercase tracking-wider ${meta.color}`}>{meta.label}</span>
+                  </div>
+                  <a href={d.url} target="_blank" rel="noreferrer" className="text-xs text-zinc-500 hover:text-amber-400 font-mono truncate inline-flex items-center gap-1">
+                    {d.url} <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+                <span className="text-[10px] text-zinc-600 font-mono whitespace-nowrap hidden sm:block">{fmtDate(d.createdAt)}</span>
+                <button onClick={() => remove(d.id)} className="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-rose-400 transition-opacity">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <div className="flex items-center gap-1.5 mt-2 pl-12 flex-wrap">
+                <button onClick={() => copyUrl(d.url)} className="text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 px-2 py-1 rounded inline-flex items-center gap-1 font-body transition-colors">
+                  <Copy className="w-3 h-3" /> Copier le lien
+                </button>
+                <button onClick={() => sendMail('review', d)} title={client?.email || 'Pas d\'email client'} className="text-[11px] text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 px-2 py-1 rounded inline-flex items-center gap-1 font-body transition-colors">
+                  <Send className="w-3 h-3" /> Envoyer pour review
+                </button>
+                <button onClick={() => sendMail('delivered', d)} title={client?.email || 'Pas d\'email client'} className="text-[11px] text-emerald-300 hover:text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 px-2 py-1 rounded inline-flex items-center gap-1 font-body transition-colors">
+                  <CheckCircle2 className="w-3 h-3" /> Livraison finale
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// ============ PROJECT REVISIONS ============
+const ProjectRevisions = ({ project, client, onUpdate }) => {
+  const [showAdd, setShowAdd] = useState(false);
+  const [draft, setDraft] = useState({ feedback: '' });
+  const history = project.revisionHistory || [];
+  const nextRound = (history.reduce((m, r) => Math.max(m, r.round || 0), 0) || 0) + 1;
+  const toast = useToast();
+  const sendReminder = () => {
+    const tpl = EMAIL_TEMPLATES.reminder(project, client);
+    if (!client?.email) {
+      copyText(`${tpl.subject}\n\n${tpl.body}`).then(ok => toast?.(ok ? 'Email copié (pas d\'adresse client)' : 'Erreur', ok ? 'info' : 'error'));
+      return;
+    }
+    window.location.href = buildMailto(client.email, tpl);
+  };
+
+  const submit = () => {
+    if (!draft.feedback.trim()) return;
+    const item = { id: 'r' + Date.now(), round: nextRound, date: today.toISOString().slice(0, 10), feedback: draft.feedback.trim(), status: 'pending' };
+    onUpdate({ ...project, revisionHistory: [...history, item] });
+    setDraft({ feedback: '' });
+    setShowAdd(false);
+  };
+  const setStatus = (id, status) => {
+    onUpdate({ ...project, revisionHistory: history.map(r => r.id === id ? { ...r, status } : r) });
+  };
+  const remove = (id) => {
+    onUpdate({ ...project, revisionHistory: history.filter(r => r.id !== id) });
+  };
+
+  return (
+    <div className="p-5 border-t border-zinc-800">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <MessageSquare className="w-3.5 h-3.5 text-zinc-500" />
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono">Historique des révisions</div>
+        </div>
+        <button onClick={() => setShowAdd(v => !v)} className="text-xs text-amber-400 hover:text-amber-300 font-body inline-flex items-center gap-1">
+          {showAdd ? <X className="w-3 h-3" /> : <Plus className="w-3 h-3" />}{showAdd ? 'Annuler' : `Round ${nextRound}`}
+        </button>
+      </div>
+
+      {showAdd && (
+        <div className="mb-3 p-3 bg-zinc-900/60 border border-zinc-800 rounded-lg space-y-2">
+          <textarea
+            autoFocus
+            value={draft.feedback}
+            onChange={e => setDraft({ feedback: e.target.value })}
+            placeholder={`Retours du client (round ${nextRound})…`}
+            rows="3"
+            className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 font-body"
+          />
+          <div className="flex justify-end">
+            <button onClick={submit} disabled={!draft.feedback.trim()} className="text-xs px-3 py-1.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-950 rounded-lg font-medium">Enregistrer</button>
+          </div>
+        </div>
+      )}
+
+      {history.length === 0 && !showAdd && (
+        <div className="text-sm text-zinc-600 italic font-body">Aucune révision enregistrée.</div>
+      )}
+
+      <div className="space-y-2">
+        {history.slice().sort((a, b) => b.round - a.round).map(r => {
+          const isPending = r.status === 'pending';
+          return (
+            <div key={r.id} className={`group p-3 rounded-lg border ${isPending ? 'bg-amber-500/5 border-amber-500/30' : 'bg-zinc-900/60 border-zinc-800'}`}>
+              <div className="flex items-start justify-between gap-3 mb-1.5">
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-mono px-2 py-0.5 rounded-full ${isPending ? 'bg-amber-500/15 text-amber-300' : 'bg-emerald-500/15 text-emerald-300'}`}>
+                    Round {r.round}
+                  </span>
+                  <span className="text-xs text-zinc-500 font-mono">{fmtDate(r.date)}</span>
+                  <span className={`text-[10px] uppercase tracking-wider font-mono ${isPending ? 'text-amber-400' : 'text-emerald-400'}`}>{isPending ? 'À traiter' : 'Traité'}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {isPending && (
+                    <>
+                      <button onClick={sendReminder} title={client?.email || 'Pas d\'email client'} className="text-xs text-amber-400 hover:text-amber-300 font-body inline-flex items-center gap-1">
+                        <Send className="w-3 h-3" /> Relancer
+                      </button>
+                      <button onClick={() => setStatus(r.id, 'addressed')} className="text-xs text-emerald-400 hover:text-emerald-300 font-body inline-flex items-center gap-1">
+                        <Check className="w-3 h-3" /> Traité
+                      </button>
+                    </>
+                  )}
+                  {!isPending && (
+                    <button onClick={() => setStatus(r.id, 'pending')} className="text-xs text-zinc-500 hover:text-amber-400 font-body">Rouvrir</button>
+                  )}
+                  <button onClick={() => remove(r.id)} className="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-rose-400 transition-opacity ml-1">
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+              <div className="text-sm text-zinc-300 font-body whitespace-pre-wrap">{r.feedback}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
 // ============ PROJECT DETAIL MODAL ============
-const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete }) => {
+const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete, onUpdateInvoice, onDuplicate }) => {
   const [editing, setEditing] = useState(false);
   const [data, setData] = useState(project);
+  const [confirmDel, setConfirmDel] = useState(false);
+  useEscape(true, onClose);
+  useEffect(() => { setData(project); setEditing(false); }, [project?.id]);
   if (!project) return null;
   const client = clients.find(c => c.id === project.clientId);
   const projectInvoices = invoices.filter(i => i.projectId === project.id);
   const stageIdx = STAGES.findIndex(s => s.id === project.stage);
 
-  const handleSave = () => { onUpdate(data); setEditing(false); };
-  const advanceStage = () => { if (stageIdx < STAGES.length - 1) onUpdate({ ...project, stage: STAGES[stageIdx + 1].id }); };
-  const previousStage = () => { if (stageIdx > 0) onUpdate({ ...project, stage: STAGES[stageIdx - 1].id }); };
+  const handleSave = () => {
+    if (!data.title.trim()) return;
+    onUpdate(data, { toast: 'Projet mis à jour' });
+    setEditing(false);
+  };
+  const advanceStage = () => {
+    if (stageIdx < STAGES.length - 1) {
+      const next = STAGES[stageIdx + 1];
+      onUpdate({ ...project, stage: next.id }, { toast: `→ ${next.label}` });
+    }
+  };
+  const previousStage = () => {
+    if (stageIdx > 0) {
+      const prev = STAGES[stageIdx - 1];
+      onUpdate({ ...project, stage: prev.id }, { toast: `→ ${prev.label}` });
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
@@ -730,7 +1659,7 @@ const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-zinc-400 font-body">Révisions</span>
-                <span className="font-mono text-sm text-violet-300">{project.revisions}</span>
+                <span className="font-mono text-sm text-violet-300">{project.revisionHistory?.length || 0}</span>
               </div>
             </div>
           </div>
@@ -762,6 +1691,26 @@ const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete
                   <div className="h-full bg-emerald-500" style={{ width: `${Math.min(100, (project.paidAmount / project.budget) * 100)}%` }}></div>
                 </div>
               </div>
+              <div className="flex justify-between items-center pt-2 border-t border-zinc-800/60">
+                <span className="text-sm text-zinc-400 font-body">Heures</span>
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => onUpdate({ ...project, hoursLogged: Math.max(0, Math.round(((project.hoursLogged || 0) + 0.5) * 2) / 2) })} className="text-[10px] text-amber-300 hover:text-amber-200 px-1.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded font-mono transition-colors">+30m</button>
+                  <button onClick={() => onUpdate({ ...project, hoursLogged: Math.max(0, Math.round(((project.hoursLogged || 0) + 1) * 2) / 2) })} className="text-[10px] text-amber-300 hover:text-amber-200 px-1.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded font-mono transition-colors">+1h</button>
+                  <input
+                    type="number" step="0.5" min="0"
+                    value={project.hoursLogged || 0}
+                    onChange={e => onUpdate({ ...project, hoursLogged: Math.max(0, parseFloat(e.target.value) || 0) })}
+                    className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-sm font-mono text-zinc-100 w-16 text-right focus:border-zinc-600 focus:outline-none"
+                  />
+                  <span className="text-xs text-zinc-500 font-mono">h</span>
+                </div>
+              </div>
+              {(project.hoursLogged || 0) > 0 && (
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-zinc-400 font-body">Taux effectif</span>
+                  <span className="font-mono text-sm text-zinc-300">{eur(project.budget / project.hoursLogged)}/h</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -775,19 +1724,28 @@ const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete
           )}
         </div>
 
+        <ProjectTasks project={project} onUpdate={onUpdate} />
+        <ProjectDeliverables project={project} client={client} onUpdate={onUpdate} />
+        <ProjectRevisions project={project} client={client} onUpdate={onUpdate} />
+
         <div className="p-5 border-t border-zinc-800">
           <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-3">Factures liées</div>
           <div className="space-y-2">
             {projectInvoices.length === 0 && <div className="text-sm text-zinc-600 italic font-body">Aucune facture émise.</div>}
             {projectInvoices.map(inv => (
               <div key={inv.id} className="flex items-center justify-between p-3 bg-zinc-900/60 border border-zinc-800 rounded-lg">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 min-w-0">
                   <span className="font-mono text-xs text-zinc-400">{inv.number}</span>
                   <StatusPill status={inv.status} />
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-xs text-zinc-500 font-mono">Échéance {fmtDate(inv.dueDate)}</span>
+                  <span className="text-xs text-zinc-500 font-mono">{inv.status === 'paid' ? `Payée ${fmtDate(inv.paidDate)}` : `Échéance ${fmtDate(inv.dueDate)}`}</span>
                   <span className="font-mono text-sm text-zinc-100">{eur(inv.amount)}</span>
+                  {inv.status !== 'paid' && (
+                    <button onClick={() => onUpdateInvoice(inv.id, { status: 'paid', paidDate: today.toISOString().slice(0, 10) })} className="text-xs text-emerald-400 hover:text-emerald-300 font-medium font-body whitespace-nowrap inline-flex items-center gap-1">
+                      <Check className="w-3 h-3" /> Marquer payée
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -795,18 +1753,33 @@ const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete
         </div>
 
         <div className="p-5 border-t border-zinc-800 flex justify-between items-center">
-          <button onClick={() => { if (confirm(`Supprimer "${project.title}" ?`)) { onDelete(project.id); onClose(); } }} className="text-sm text-rose-400 hover:text-rose-300 flex items-center gap-1 font-body">
+          <button onClick={() => setConfirmDel(true)} className="text-sm text-rose-400 hover:text-rose-300 flex items-center gap-1 font-body">
             <Trash2 className="w-4 h-4" /> Supprimer
           </button>
-          <button onClick={onClose} className="text-sm text-zinc-400 hover:text-zinc-100 px-4 py-2 font-body">Fermer</button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => onDuplicate(project)} className="text-sm text-zinc-300 hover:text-zinc-100 border border-zinc-800 hover:border-zinc-600 px-3 py-2 rounded-lg font-body inline-flex items-center gap-1.5 transition-colors">
+              <Files className="w-4 h-4" /> Dupliquer
+            </button>
+            <button onClick={onClose} className="text-sm text-zinc-400 hover:text-zinc-100 px-4 py-2 font-body">Fermer</button>
+          </div>
         </div>
       </div>
+      <ConfirmModal
+        open={confirmDel}
+        title={`Supprimer « ${project.title} » ?`}
+        message={projectInvoices.length > 0 ? `Ce projet a ${projectInvoices.length} facture${projectInvoices.length > 1 ? 's' : ''} liée${projectInvoices.length > 1 ? 's' : ''} qui seront aussi supprimées.` : 'Cette action est irréversible.'}
+        confirmLabel="Supprimer"
+        danger
+        onCancel={() => setConfirmDel(false)}
+        onConfirm={() => { setConfirmDel(false); onDelete(project.id); onClose(); }}
+      />
     </div>
   );
 };
 
 // ============ NEW PROJECT MODAL ============
-const NewProjectModal = ({ clients, onClose, onCreate }) => {
+const NewProjectModal = ({ clients, onClose, onCreate, onCreateClient }) => {
+  useEscape(true, onClose);
   const [data, setData] = useState({
     clientId: clients[0]?.id || '',
     title: '',
@@ -816,20 +1789,47 @@ const NewProjectModal = ({ clients, onClose, onCreate }) => {
     budget: 5000,
     notes: ''
   });
+  const toast = useToast();
+  const valid = data.title.trim() && data.clientId && data.deadline >= data.startDate && data.budget >= 0;
 
   const submit = () => {
-    if (!data.title || !data.clientId) return;
+    if (!valid) {
+      toast?.('Vérifiez les champs (titre, client, dates)', 'error');
+      return;
+    }
     onCreate({
       id: 'p' + Date.now(),
       ...data,
       stage: 'onboarding',
       invoicedAmount: 0,
       paidAmount: 0,
-      revisions: 0,
+      tasks: buildDefaultTasks(data.type),
+      deliverables: [],
+      revisionHistory: [],
       createdAt: today.toISOString().slice(0, 10)
     });
     onClose();
   };
+
+  if (clients.length === 0) {
+    return (
+      <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
+        <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+          <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+            <h2 className="font-display text-2xl text-zinc-100">Aucun client</h2>
+            <button onClick={onClose} className="w-9 h-9 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 flex items-center justify-center"><X className="w-4 h-4" /></button>
+          </div>
+          <div className="p-5 space-y-3">
+            <p className="text-sm text-zinc-400 font-body">Vous devez créer un client avant de pouvoir lancer un projet.</p>
+          </div>
+          <div className="p-5 border-t border-zinc-800 flex justify-end gap-2">
+            <button onClick={onClose} className="text-sm px-4 py-2 text-zinc-400 hover:text-zinc-100 font-body">Annuler</button>
+            <button onClick={() => { onClose(); onCreateClient(); }} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium rounded-lg">Créer un client</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
@@ -878,7 +1878,7 @@ const NewProjectModal = ({ clients, onClose, onCreate }) => {
         </div>
         <div className="p-5 border-t border-zinc-800 flex justify-end gap-2">
           <button onClick={onClose} className="text-sm px-4 py-2 text-zinc-400 hover:text-zinc-100 font-body">Annuler</button>
-          <button onClick={submit} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium rounded-lg">Créer le projet</button>
+          <button onClick={submit} disabled={!valid} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-950 font-medium rounded-lg">Créer le projet</button>
         </div>
       </div>
     </div>
@@ -887,9 +1887,15 @@ const NewProjectModal = ({ clients, onClose, onCreate }) => {
 
 // ============ NEW CLIENT MODAL ============
 const NewClientModal = ({ onClose, onCreate }) => {
+  useEscape(true, onClose);
   const [data, setData] = useState({ name: '', company: '', email: '', phone: '' });
+  const toast = useToast();
+  const valid = data.company.trim() && data.name.trim();
   const submit = () => {
-    if (!data.company || !data.name) return;
+    if (!valid) {
+      toast?.('Société et contact sont requis', 'error');
+      return;
+    }
     onCreate({ id: 'c' + Date.now(), ...data, createdAt: today.toISOString().slice(0, 10) });
     onClose();
   };
@@ -920,26 +1926,157 @@ const NewClientModal = ({ onClose, onCreate }) => {
         </div>
         <div className="p-5 border-t border-zinc-800 flex justify-end gap-2">
           <button onClick={onClose} className="text-sm px-4 py-2 text-zinc-400 hover:text-zinc-100 font-body">Annuler</button>
-          <button onClick={submit} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium rounded-lg">Créer</button>
+          <button onClick={submit} disabled={!valid} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-950 font-medium rounded-lg">Créer</button>
         </div>
       </div>
     </div>
   );
 };
 
+// ============ CLIENT DETAIL MODAL ============
+const ClientDetail = ({ client, projects, invoices, onClose, onUpdate, onDelete, onSelectProject }) => {
+  const [editing, setEditing] = useState(false);
+  const [data, setData] = useState(client);
+  const [confirmDel, setConfirmDel] = useState(false);
+  useEscape(true, onClose);
+  useEffect(() => { setData(client); }, [client]);
+  if (!client) return null;
+
+  const clientProjects = projects.filter(p => p.clientId === client.id);
+  const clientInvoices = invoices.filter(i => i.clientId === client.id);
+  const totalRevenue = clientInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.amount, 0);
+  const pending = clientInvoices.filter(i => i.status !== 'paid').reduce((s, i) => s + i.amount, 0);
+
+  const save = () => {
+    if (!data.company.trim() || !data.name.trim()) return;
+    onUpdate(data);
+    setEditing(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in" onClick={onClose}>
+      <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto scrollbar-thin" onClick={e => e.stopPropagation()}>
+        <div className="sticky top-0 bg-zinc-950 border-b border-zinc-800 p-5 flex items-start justify-between z-10">
+          <div className="flex items-center gap-4 min-w-0 flex-1">
+            <div className="w-12 h-12 rounded-lg bg-zinc-800 flex items-center justify-center font-display text-2xl text-amber-400 flex-shrink-0">
+              {client.company.charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              {editing ? (
+                <input value={data.company} onChange={e => setData({ ...data, company: e.target.value })} className="font-display text-2xl text-zinc-100 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 w-full" />
+              ) : (
+                <h2 className="font-display text-2xl text-zinc-100 truncate">{client.company}</h2>
+              )}
+              {editing ? (
+                <input value={data.name} onChange={e => setData({ ...data, name: e.target.value })} className="text-sm text-zinc-400 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 w-full mt-1 font-body" />
+              ) : (
+                <div className="text-sm text-zinc-400 font-body truncate">{client.name}</div>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {!editing && <button onClick={() => setEditing(true)} className="w-9 h-9 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center"><Edit3 className="w-4 h-4" /></button>}
+            {editing && <button onClick={save} className="px-3 h-9 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-sm font-medium">Sauvegarder</button>}
+            <button onClick={onClose} className="w-9 h-9 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center"><X className="w-4 h-4" /></button>
+          </div>
+        </div>
+
+        <div className="p-5 grid grid-cols-2 gap-4">
+          <div className="space-y-3">
+            <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono">Contact</div>
+            <div className="flex items-center gap-2 text-sm">
+              <Mail className="w-4 h-4 text-zinc-500 flex-shrink-0" />
+              {editing ? (
+                <input type="email" value={data.email} onChange={e => setData({ ...data, email: e.target.value })} className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm font-mono text-zinc-200 flex-1" />
+              ) : (
+                <a href={`mailto:${client.email}`} className="font-mono text-zinc-300 hover:text-amber-400 truncate">{client.email || '—'}</a>
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <Phone className="w-4 h-4 text-zinc-500 flex-shrink-0" />
+              {editing ? (
+                <input value={data.phone} onChange={e => setData({ ...data, phone: e.target.value })} className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm font-mono text-zinc-200 flex-1" />
+              ) : (
+                <a href={`tel:${client.phone}`} className="font-mono text-zinc-300 hover:text-amber-400">{client.phone || '—'}</a>
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <Building2 className="w-4 h-4 text-zinc-500 flex-shrink-0" />
+              <span className="font-mono text-zinc-500 text-xs">Client depuis {fmtDateLong(client.createdAt)}</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3">
+              <div className="text-xs text-zinc-500 font-mono">Projets</div>
+              <div className="font-display text-2xl text-zinc-100">{clientProjects.length}</div>
+            </div>
+            <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-3">
+              <div className="text-xs text-emerald-400/70 font-mono">Encaissé</div>
+              <div className="font-display text-2xl text-emerald-300">{eur(totalRevenue)}</div>
+            </div>
+            <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3">
+              <div className="text-xs text-amber-400/70 font-mono">En attente</div>
+              <div className="font-display text-2xl text-amber-300">{eur(pending)}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-5 border-t border-zinc-800">
+          <div className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-3">Projets</div>
+          <div className="space-y-2">
+            {clientProjects.length === 0 && <div className="text-sm text-zinc-600 italic font-body">Aucun projet pour ce client.</div>}
+            {clientProjects.map(p => (
+              <button key={p.id} onClick={() => { onClose(); onSelectProject(p); }} className="w-full flex items-center gap-3 p-3 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 rounded-lg text-left transition-colors">
+                <StagePill stage={p.stage} />
+                <span className="text-sm text-zinc-200 flex-1 truncate">{p.title}</span>
+                <span className="font-mono text-xs text-zinc-500">{eur(p.budget)}</span>
+                <ChevronRight className="w-4 h-4 text-zinc-600" />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="p-5 border-t border-zinc-800 flex justify-between items-center">
+          <button onClick={() => setConfirmDel(true)} className="text-sm text-rose-400 hover:text-rose-300 flex items-center gap-1 font-body">
+            <Trash2 className="w-4 h-4" /> Supprimer
+          </button>
+          <button onClick={onClose} className="text-sm text-zinc-400 hover:text-zinc-100 px-4 py-2 font-body">Fermer</button>
+        </div>
+      </div>
+      <ConfirmModal
+        open={confirmDel}
+        title={`Supprimer ${client.company} ?`}
+        message={clientProjects.length > 0
+          ? `Ce client a ${clientProjects.length} projet${clientProjects.length > 1 ? 's' : ''} et ${clientInvoices.length} facture${clientInvoices.length > 1 ? 's' : ''}. Tout sera supprimé.`
+          : 'Cette action est irréversible.'}
+        confirmLabel="Supprimer"
+        danger
+        onCancel={() => setConfirmDel(false)}
+        onConfirm={() => { setConfirmDel(false); onDelete(client.id); onClose(); }}
+      />
+    </div>
+  );
+};
+
 // ============ NEW INVOICE MODAL ============
 const NewInvoiceModal = ({ projects, clients, invoices, onClose, onCreate }) => {
+  useEscape(true, onClose);
   const [data, setData] = useState({
     projectId: projects[0]?.id || '',
     amount: 1000,
     dueDate: dateOffset(14)
   });
+  const toast = useToast();
 
   const project = projects.find(p => p.id === data.projectId);
   const nextNumber = `JESSE-2026-${String(48 + invoices.length).padStart(4, '0')}`;
+  const valid = project && parseFloat(data.amount) > 0 && data.dueDate;
 
   const submit = () => {
-    if (!project) return;
+    if (!valid) {
+      toast?.('Vérifiez le montant et la date d\'échéance', 'error');
+      return;
+    }
     onCreate({
       id: 'i' + Date.now(),
       number: nextNumber,
@@ -970,6 +2107,7 @@ const NewInvoiceModal = ({ projects, clients, invoices, onClose, onCreate }) => 
           <div>
             <label className="text-xs uppercase tracking-widest text-zinc-500 font-mono mb-1.5 block">Projet</label>
             <select value={data.projectId} onChange={e => setData({ ...data, projectId: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 font-body">
+              {projects.length === 0 && <option value="">Aucun projet — créez-en un d'abord</option>}
               {projects.map(p => {
                 const c = clients.find(cl => cl.id === p.clientId);
                 return <option key={p.id} value={p.id}>{c?.company} — {p.title}</option>;
@@ -989,8 +2127,118 @@ const NewInvoiceModal = ({ projects, clients, invoices, onClose, onCreate }) => 
         </div>
         <div className="p-5 border-t border-zinc-800 flex justify-end gap-2">
           <button onClick={onClose} className="text-sm px-4 py-2 text-zinc-400 hover:text-zinc-100 font-body">Annuler</button>
-          <button onClick={submit} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium rounded-lg">Émettre</button>
+          <button onClick={submit} disabled={!valid} className="text-sm px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-950 font-medium rounded-lg">Émettre</button>
         </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ NOTIFICATIONS DROPDOWN ============
+const NotificationsPanel = ({ projects, invoices, clients, onSelectProject, onNavigate, onClose }) => {
+  const ref = useRef(null);
+  useEffect(() => {
+    const onClick = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+    setTimeout(() => document.addEventListener('mousedown', onClick), 0);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [onClose]);
+
+  const overdueInvoices = invoices.filter(i => i.status === 'overdue');
+  const upcomingDeadlines = projects
+    .filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) >= 0 && daysUntil(p.deadline) <= 5)
+    .sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+  const overdueProjects = projects
+    .filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) < 0);
+  const pendingRevisions = projects
+    .flatMap(p => (p.revisionHistory || []).filter(r => r.status === 'pending').map(r => ({ project: p, revision: r })))
+    .sort((a, b) => new Date(a.revision.date) - new Date(b.revision.date));
+
+  const total = overdueInvoices.length + upcomingDeadlines.length + overdueProjects.length + pendingRevisions.length;
+
+  return (
+    <div ref={ref} className="absolute right-0 top-12 w-96 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl z-30 animate-in overflow-hidden">
+      <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
+        <div>
+          <div className="font-display text-lg text-zinc-100">Notifications</div>
+          <div className="text-xs text-zinc-500 font-mono">{total} alerte{total !== 1 ? 's' : ''}</div>
+        </div>
+      </div>
+      <div className="max-h-96 overflow-y-auto scrollbar-thin">
+        {total === 0 && (
+          <div className="p-8 text-center">
+            <CheckCircle2 className="w-8 h-8 text-emerald-500/60 mx-auto mb-2" />
+            <div className="text-sm text-zinc-400 font-body">Tout est sous contrôle.</div>
+          </div>
+        )}
+        {overdueInvoices.length > 0 && (
+          <div>
+            <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-widest text-rose-400/80 font-mono">Factures en retard</div>
+            {overdueInvoices.map(inv => {
+              const c = clients.find(cl => cl.id === inv.clientId);
+              return (
+                <button key={inv.id} onClick={() => { onClose(); onNavigate('invoices'); }} className="w-full text-left flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-900 transition-colors">
+                  <span className="w-2 h-2 rounded-full bg-rose-400 flex-shrink-0 animate-pulse-slow"></span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-zinc-200 truncate">{c?.company} · {inv.number}</div>
+                    <div className="text-xs text-zinc-500 font-mono">Échue {fmtDate(inv.dueDate)} · {eur(inv.amount)}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {overdueProjects.length > 0 && (
+          <div>
+            <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-widest text-rose-400/80 font-mono">Deadlines dépassées</div>
+            {overdueProjects.map(p => {
+              const c = clients.find(cl => cl.id === p.clientId);
+              return (
+                <button key={p.id} onClick={() => { onClose(); onSelectProject(p); }} className="w-full text-left flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-900 transition-colors">
+                  <span className="w-2 h-2 rounded-full bg-rose-400 flex-shrink-0"></span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-zinc-200 truncate">{p.title}</div>
+                    <div className="text-xs text-zinc-500 font-mono">{c?.company} · J+{Math.abs(daysUntil(p.deadline))}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {pendingRevisions.length > 0 && (
+          <div>
+            <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-widest text-violet-400/80 font-mono">Révisions à traiter</div>
+            {pendingRevisions.map(({ project, revision }) => {
+              const c = clients.find(cl => cl.id === project.clientId);
+              return (
+                <button key={revision.id} onClick={() => { onClose(); onSelectProject(project); }} className="w-full text-left flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-900 transition-colors">
+                  <span className="w-2 h-2 rounded-full bg-violet-400 flex-shrink-0"></span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-zinc-200 truncate">Round {revision.round} · {project.title}</div>
+                    <div className="text-xs text-zinc-500 font-mono truncate">{c?.company} · {fmtDate(revision.date)}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {upcomingDeadlines.length > 0 && (
+          <div>
+            <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-widest text-amber-400/80 font-mono">Deadlines proches</div>
+            {upcomingDeadlines.map(p => {
+              const c = clients.find(cl => cl.id === p.clientId);
+              const days = daysUntil(p.deadline);
+              return (
+                <button key={p.id} onClick={() => { onClose(); onSelectProject(p); }} className="w-full text-left flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-900 transition-colors">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0"></span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-zinc-200 truncate">{p.title}</div>
+                    <div className="text-xs text-zinc-500 font-mono">{c?.company} · {days === 0 ? "aujourd'hui" : `J-${days}`}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -998,28 +2246,30 @@ const NewInvoiceModal = ({ projects, clients, invoices, onClose, onCreate }) => 
 
 // ============ MAIN APP ============
 function JesseDashboard() {
-  const [activeView, setActiveView] = useState('dashboard');
+  const [activeView, setActiveView] = useState('today');
   const [clients, setClients] = useState([]);
   const [projects, setProjects] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedProject, setSelectedProject] = useState(null);
+  const [selectedClient, setSelectedClient] = useState(null);
   const [showNewProject, setShowNewProject] = useState(false);
   const [showNewClient, setShowNewClient] = useState(false);
   const [showNewInvoice, setShowNewInvoice] = useState(false);
+  const [showNotifs, setShowNotifs] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmInvoiceDel, setConfirmInvoiceDel] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const toast = useToast();
 
   useEffect(() => {
     const stored = loadStore();
-    if (stored) {
-      setClients(stored.clients || seedClients);
-      setProjects(stored.projects || seedProjects);
-      setInvoices(stored.invoices || seedInvoices);
-    } else {
-      setClients(seedClients);
-      setProjects(seedProjects);
-      setInvoices(seedInvoices);
-    }
+    const baseClients = stored?.clients || seedClients;
+    const baseProjects = (stored?.projects || seedProjects).map(migrateProject);
+    const baseInvoices = reconcileInvoiceStatus(stored?.invoices || seedInvoices);
+    setClients(baseClients);
+    setProjects(baseProjects);
+    setInvoices(baseInvoices);
     setLoading(false);
     const el = document.getElementById('loading');
     if (el) el.style.display = 'none';
@@ -1029,26 +2279,115 @@ function JesseDashboard() {
     if (!loading) saveStore({ clients, projects, invoices });
   }, [clients, projects, invoices, loading]);
 
-  const updateProject = (data) => {
-    setProjects(projects.map(p => p.id === data.id ? data : p));
+  const updateProject = (data, opts = {}) => {
+    setProjects(prev => prev.map(p => p.id === data.id ? data : p));
     if (selectedProject?.id === data.id) setSelectedProject(data);
+    if (opts.toast) toast?.(opts.toast);
   };
-  const deleteProject = (id) => setProjects(projects.filter(p => p.id !== id));
-  const createProject = (p) => setProjects([...projects, p]);
-  const createClient = (c) => setClients([...clients, c]);
-  const updateInvoice = (id, patch) => setInvoices(invoices.map(i => i.id === id ? { ...i, ...patch } : i));
+  const deleteProject = (id) => {
+    const p = projects.find(x => x.id === id);
+    setProjects(prev => prev.filter(x => x.id !== id));
+    setInvoices(prev => prev.filter(i => i.projectId !== id));
+    toast?.(`« ${p?.title || 'Projet'} » supprimé`);
+  };
+  const createProject = (p) => {
+    setProjects(prev => [...prev, p]);
+    toast?.('Projet créé');
+  };
+  const duplicateProject = (project) => {
+    const dup = duplicateProjectData(project);
+    setProjects(prev => [...prev, dup]);
+    setSelectedProject(dup);
+    toast?.(`Projet dupliqué : ${dup.title}`, 'info');
+  };
+  const createClient = (c) => {
+    setClients(prev => [...prev, c]);
+    toast?.('Client ajouté');
+  };
+  const updateClient = (data) => {
+    setClients(prev => prev.map(c => c.id === data.id ? data : c));
+    if (selectedClient?.id === data.id) setSelectedClient(data);
+    toast?.('Client mis à jour');
+  };
+  const deleteClient = (id) => {
+    const c = clients.find(x => x.id === id);
+    const projIds = projects.filter(p => p.clientId === id).map(p => p.id);
+    setClients(prev => prev.filter(x => x.id !== id));
+    setProjects(prev => prev.filter(p => p.clientId !== id));
+    setInvoices(prev => prev.filter(i => i.clientId !== id && !projIds.includes(i.projectId)));
+    toast?.(`${c?.company || 'Client'} supprimé`);
+  };
+  const updateInvoice = (id, patch) => {
+    setInvoices(prev => prev.map(i => {
+      if (i.id !== id) return i;
+      const updated = { ...i, ...patch };
+      // Sync paidAmount sur le projet quand on passe à payé
+      if (patch.status === 'paid' && i.status !== 'paid') {
+        setProjects(curr => curr.map(p => p.id === i.projectId ? { ...p, paidAmount: Math.min(p.budget, (p.paidAmount || 0) + i.amount) } : p));
+      } else if (patch.status && patch.status !== 'paid' && i.status === 'paid') {
+        setProjects(curr => curr.map(p => p.id === i.projectId ? { ...p, paidAmount: Math.max(0, (p.paidAmount || 0) - i.amount) } : p));
+      }
+      return updated;
+    }));
+    if (patch.status === 'paid') toast?.('Facture marquée payée');
+  };
+  const deleteInvoice = (inv) => {
+    setInvoices(prev => prev.filter(i => i.id !== inv.id));
+    setProjects(prev => prev.map(p => {
+      if (p.id !== inv.projectId) return p;
+      return {
+        ...p,
+        invoicedAmount: Math.max(0, (p.invoicedAmount || 0) - inv.amount),
+        paidAmount: inv.status === 'paid' ? Math.max(0, (p.paidAmount || 0) - inv.amount) : p.paidAmount
+      };
+    }));
+    toast?.('Facture supprimée');
+  };
   const createInvoice = (inv) => {
-    setInvoices([...invoices, inv]);
-    setProjects(projects.map(p => p.id === inv.projectId ? { ...p, invoicedAmount: p.invoicedAmount + inv.amount } : p));
+    setInvoices(prev => [...prev, inv]);
+    setProjects(prev => prev.map(p => p.id === inv.projectId ? { ...p, invoicedAmount: (p.invoicedAmount || 0) + inv.amount } : p));
+    toast?.(`Facture ${inv.number} émise`);
+  };
+  const moveStage = (projectId, newStage) => {
+    setProjects(prev => prev.map(p => p.id === projectId ? { ...p, stage: newStage } : p));
+    const p = projects.find(x => x.id === projectId);
+    const meta = STAGES.find(s => s.id === newStage);
+    if (p && p.stage !== newStage) toast?.(`${p.title} → ${meta?.label}`, 'info');
+  };
+  const resetData = () => {
+    setClients(seedClients);
+    setProjects(seedProjects.map(migrateProject));
+    setInvoices(reconcileInvoiceStatus(seedInvoices));
+    setConfirmReset(false);
+    toast?.('Données restaurées', 'info');
   };
 
+  // Raccourci clavier global pour la recherche
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        document.getElementById('global-search')?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const navItems = [
+    { id: 'today', label: "Aujourd'hui", icon: Sun },
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'projects', label: 'Projets', icon: FolderKanban },
     { id: 'calendar', label: 'Calendrier', icon: CalendarDays },
     { id: 'invoices', label: 'Facturation', icon: Receipt },
     { id: 'clients', label: 'Clients', icon: Users }
   ];
+
+  const totalNotifs =
+    invoices.filter(i => i.status === 'overdue').length +
+    projects.filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) < 0).length +
+    projects.filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) >= 0 && daysUntil(p.deadline) <= 5).length +
+    projects.reduce((s, p) => s + (p.revisionHistory || []).filter(r => r.status === 'pending').length, 0);
 
   if (loading) return null;
 
@@ -1081,7 +2420,7 @@ function JesseDashboard() {
             })}
           </nav>
 
-          <div className="p-3 border-t border-zinc-800/80">
+          <div className="p-3 border-t border-zinc-800/80 space-y-2">
             <div className="bg-zinc-900/60 rounded-lg p-3">
               <div className="flex items-center gap-2 mb-2">
                 <Sparkles className="w-3.5 h-3.5 text-amber-400" />
@@ -1089,54 +2428,101 @@ function JesseDashboard() {
               </div>
               <div className="text-[11px] text-zinc-500 font-body leading-relaxed">Mock activé · webhook prêt à brancher</div>
             </div>
+            <button onClick={() => setConfirmReset(true)} className="w-full flex items-center gap-2 text-[11px] text-zinc-600 hover:text-zinc-300 px-2 py-1.5 transition-colors font-mono">
+              <RotateCcw className="w-3 h-3" /> Restaurer données démo
+            </button>
           </div>
         </aside>
 
         <main className="flex-1 flex flex-col min-w-0">
-          <header className="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-10">
+          <header className="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-20">
             <div className="flex items-center gap-4 px-6 py-3">
               <div className="flex-1 max-w-md relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
-                <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Rechercher un projet, un client…" className="w-full bg-zinc-900/60 border border-zinc-800 rounded-lg pl-10 pr-3 py-2 text-sm text-zinc-200 font-body focus:border-zinc-600 focus:outline-none" />
+                <input id="global-search" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Rechercher  ⌘K" className="w-full bg-zinc-900/60 border border-zinc-800 rounded-lg pl-10 pr-3 py-2 text-sm text-zinc-200 font-body focus:border-zinc-600 focus:outline-none" />
+                {searchQuery && (
+                  <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
               <div className="text-xs text-zinc-500 font-mono">{today.toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: 'long' })}</div>
-              <button className="w-9 h-9 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center relative">
-                <Bell className="w-4 h-4" />
-                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-              </button>
-              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center text-xs font-medium text-zinc-200">RB</div>
+              <div className="relative">
+                <button onClick={() => setShowNotifs(v => !v)} className="w-9 h-9 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center relative transition-colors">
+                  <Bell className="w-4 h-4" />
+                  {totalNotifs > 0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-400 text-zinc-950 text-[10px] font-bold flex items-center justify-center">{totalNotifs}</span>}
+                </button>
+                {showNotifs && (
+                  <NotificationsPanel
+                    projects={projects}
+                    invoices={invoices}
+                    clients={clients}
+                    onSelectProject={setSelectedProject}
+                    onNavigate={setActiveView}
+                    onClose={() => setShowNotifs(false)}
+                  />
+                )}
+              </div>
+              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-xs font-bold text-zinc-950">JE</div>
             </div>
           </header>
 
           <div className="flex-1 p-6 overflow-y-auto scrollbar-thin">
+            {activeView === 'today' && (
+              <TodayView projects={projects} invoices={invoices} clients={clients} onSelectProject={setSelectedProject} onUpdateProject={updateProject} onUpdateInvoice={updateInvoice} onNavigate={setActiveView} />
+            )}
             {activeView === 'dashboard' && (
               <DashboardView projects={projects} invoices={invoices} clients={clients} onSelectProject={setSelectedProject} onNewProject={() => setShowNewProject(true)} />
             )}
             {activeView === 'projects' && (
-              <ProjectsView projects={projects} clients={clients} onSelectProject={setSelectedProject} onNewProject={() => setShowNewProject(true)} />
+              <ProjectsView projects={projects} clients={clients} onSelectProject={setSelectedProject} onNewProject={() => setShowNewProject(true)} searchQuery={searchQuery} onMoveStage={moveStage} />
             )}
             {activeView === 'calendar' && (
               <CalendarView projects={projects} clients={clients} invoices={invoices} onSelectProject={setSelectedProject} />
             )}
             {activeView === 'invoices' && (
-              <InvoicesView invoices={invoices} clients={clients} projects={projects} onUpdateInvoice={updateInvoice} onNewInvoice={() => setShowNewInvoice(true)} />
+              <InvoicesView invoices={invoices} clients={clients} projects={projects} onUpdateInvoice={updateInvoice} onNewInvoice={() => setShowNewInvoice(true)} onDeleteInvoice={(inv) => setConfirmInvoiceDel(inv)} searchQuery={searchQuery} disableNew={projects.length === 0} />
             )}
             {activeView === 'clients' && (
-              <ClientsView clients={clients} projects={projects} invoices={invoices} onNewClient={() => setShowNewClient(true)} />
+              <ClientsView clients={clients} projects={projects} invoices={invoices} onNewClient={() => setShowNewClient(true)} onSelectClient={setSelectedClient} searchQuery={searchQuery} />
             )}
           </div>
         </main>
       </div>
 
-      {selectedProject && <ProjectDetail project={selectedProject} clients={clients} invoices={invoices} onClose={() => setSelectedProject(null)} onUpdate={updateProject} onDelete={deleteProject} />}
-      {showNewProject && <NewProjectModal clients={clients} onClose={() => setShowNewProject(false)} onCreate={createProject} />}
+      {selectedProject && <ProjectDetail project={selectedProject} clients={clients} invoices={invoices} onClose={() => setSelectedProject(null)} onUpdate={updateProject} onDelete={deleteProject} onUpdateInvoice={updateInvoice} onDuplicate={duplicateProject} />}
+      {selectedClient && <ClientDetail client={selectedClient} projects={projects} invoices={invoices} onClose={() => setSelectedClient(null)} onUpdate={updateClient} onDelete={deleteClient} onSelectProject={setSelectedProject} />}
+      {showNewProject && <NewProjectModal clients={clients} onClose={() => setShowNewProject(false)} onCreate={createProject} onCreateClient={() => setShowNewClient(true)} />}
       {showNewClient && <NewClientModal onClose={() => setShowNewClient(false)} onCreate={createClient} />}
       {showNewInvoice && <NewInvoiceModal projects={projects} clients={clients} invoices={invoices} onClose={() => setShowNewInvoice(false)} onCreate={createInvoice} />}
+
+      <ConfirmModal
+        open={confirmReset}
+        title="Restaurer les données de démo ?"
+        message="Toutes vos modifications locales seront écrasées par le jeu de données initial."
+        confirmLabel="Restaurer"
+        danger
+        onCancel={() => setConfirmReset(false)}
+        onConfirm={resetData}
+      />
+      <ConfirmModal
+        open={!!confirmInvoiceDel}
+        title={`Supprimer la facture ${confirmInvoiceDel?.number} ?`}
+        message="Cette action est irréversible. Le montant sera retiré du facturé du projet."
+        confirmLabel="Supprimer"
+        danger
+        onCancel={() => setConfirmInvoiceDel(null)}
+        onConfirm={() => { deleteInvoice(confirmInvoiceDel); setConfirmInvoiceDel(null); }}
+      />
     </div>
   );
 }
 
-createRoot(document.getElementById('root')).render(<JesseDashboard />);
+createRoot(document.getElementById('root')).render(
+  <ToastProvider>
+    <JesseDashboard />
+  </ToastProvider>
+);
 </script>
 </body>
 </html>
