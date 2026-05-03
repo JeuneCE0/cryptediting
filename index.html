@@ -58,7 +58,7 @@ import {
   Trash2, Clock, FileVideo, CheckCircle2, AlertCircle,
   Film, Sparkles, TrendingUp, ExternalLink, Download, RotateCcw,
   Check, Mail, Phone, Building2, Inbox,
-  ListTodo, Link2, PlayCircle, Cloud, MessageSquare, GripVertical,
+  ListTodo, Link2, PlayCircle, Play, Pause, Cloud, MessageSquare, GripVertical,
   Send, HardDrive, Youtube, Square, CheckSquare,
   Sun, Copy, Files, Zap, ArrowRight
 } from 'lucide-react';
@@ -316,6 +316,17 @@ const fmtDate = (s) => s ? new Date(s).toLocaleDateString('fr-FR', { day: '2-dig
 const fmtDateLong = (s) => s ? new Date(s).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' }) : '—';
 const daysUntil = (d) => Math.ceil((new Date(d) - today) / 86400000);
 const stageMeta = (id) => STAGES.find(s => s.id === id) || STAGES[0];
+
+// Timer: format H:MM:SS / M:SS et conversion en heures arrondies au quart (min 0.25h)
+const formatElapsed = (ms) => {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+};
+const elapsedToHours = (ms) => Math.max(0.25, Math.round(ms / 1000 / 60 / 15) * 15 / 60);
 
 // ============ STORAGE (localStorage) ============
 const STORAGE_KEY = 'jesse-dashboard-v1';
@@ -1558,7 +1569,7 @@ const ProjectRevisions = ({ project, client, onUpdate }) => {
 };
 
 // ============ PROJECT DETAIL MODAL ============
-const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete, onUpdateInvoice, onDuplicate }) => {
+const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete, onUpdateInvoice, onDuplicate, timer, onStartTimer, onStopTimer }) => {
   const [editing, setEditing] = useState(false);
   const [data, setData] = useState(project);
   const [confirmDel, setConfirmDel] = useState(false);
@@ -1694,6 +1705,25 @@ const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete
               <div className="flex justify-between items-center pt-2 border-t border-zinc-800/60">
                 <span className="text-sm text-zinc-400 font-body">Heures</span>
                 <div className="flex items-center gap-1.5">
+                  {timer?.projectId === project.id ? (
+                    <button
+                      onClick={() => onStopTimer?.()}
+                      className="text-[10px] text-amber-100 hover:text-white px-1.5 py-1 bg-amber-500/30 hover:bg-amber-500/40 border border-amber-400/50 rounded font-mono transition-colors flex items-center gap-1"
+                      title="Arrêter le timer (heures ajoutées au projet)"
+                    >
+                      <Square className="w-2.5 h-2.5" />
+                      <span className="tabular-nums">{formatElapsed(Date.now() - timer.startedAt)}</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => onStartTimer?.(project.id)}
+                      className="text-[10px] text-emerald-300 hover:text-emerald-200 px-1.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded font-mono transition-colors flex items-center gap-1"
+                      title={timer ? 'Stoppe le timer en cours et démarre sur ce projet' : 'Démarrer un timer sur ce projet'}
+                    >
+                      <Play className="w-2.5 h-2.5" />
+                      Démarrer
+                    </button>
+                  )}
                   <button onClick={() => onUpdate({ ...project, hoursLogged: Math.max(0, Math.round(((project.hoursLogged || 0) + 0.5) * 2) / 2) })} className="text-[10px] text-amber-300 hover:text-amber-200 px-1.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded font-mono transition-colors">+30m</button>
                   <button onClick={() => onUpdate({ ...project, hoursLogged: Math.max(0, Math.round(((project.hoursLogged || 0) + 1) * 2) / 2) })} className="text-[10px] text-amber-300 hover:text-amber-200 px-1.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded font-mono transition-colors">+1h</button>
                   <input
@@ -2260,6 +2290,8 @@ function JesseDashboard() {
   const [confirmReset, setConfirmReset] = useState(false);
   const [confirmInvoiceDel, setConfirmInvoiceDel] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [timer, setTimer] = useState(null); // { projectId, startedAt: epoch ms } | null
+  const [, setTick] = useState(0); // force re-render chaque seconde quand un timer tourne
   const toast = useToast();
 
   useEffect(() => {
@@ -2270,14 +2302,24 @@ function JesseDashboard() {
     setClients(baseClients);
     setProjects(baseProjects);
     setInvoices(baseInvoices);
+    if (stored?.timer && typeof stored.timer.startedAt === 'number' && stored.timer.projectId) {
+      setTimer(stored.timer);
+    }
     setLoading(false);
     const el = document.getElementById('loading');
     if (el) el.style.display = 'none';
   }, []);
 
   useEffect(() => {
-    if (!loading) saveStore({ clients, projects, invoices });
-  }, [clients, projects, invoices, loading]);
+    if (!loading) saveStore({ clients, projects, invoices, timer });
+  }, [clients, projects, invoices, timer, loading]);
+
+  // Tick chaque seconde uniquement si timer actif (sinon laisse le CPU tranquille)
+  useEffect(() => {
+    if (!timer) return;
+    const id = setInterval(() => setTick(t => (t + 1) % 1e9), 1000);
+    return () => clearInterval(id);
+  }, [timer]);
 
   const updateProject = (data, opts = {}) => {
     setProjects(prev => prev.map(p => p.id === data.id ? data : p));
@@ -2358,8 +2400,38 @@ function JesseDashboard() {
     setClients(seedClients);
     setProjects(seedProjects.map(migrateProject));
     setInvoices(reconcileInvoiceStatus(seedInvoices));
+    setTimer(null);
     setConfirmReset(false);
     toast?.('Données restaurées', 'info');
+  };
+
+  // Timer: enregistre les heures sur le projet courant et stoppe.
+  // opts.silent évite le toast (utile lors d'un switch automatique).
+  const stopTimer = (opts = {}) => {
+    if (!timer) return;
+    const hours = elapsedToHours(Date.now() - timer.startedAt);
+    const projectId = timer.projectId;
+    const round025 = (v) => Math.round(v * 4) / 4;
+    setProjects(prev => prev.map(p => p.id === projectId
+      ? { ...p, hoursLogged: round025((p.hoursLogged || 0) + hours) }
+      : p));
+    setSelectedProject(curr => (curr && curr.id === projectId)
+      ? { ...curr, hoursLogged: round025((curr.hoursLogged || 0) + hours) }
+      : curr);
+    setTimer(null);
+    if (!opts.silent) {
+      const project = projects.find(p => p.id === projectId);
+      toast?.(`+${hours}h enregistrée${hours > 1 ? 's' : ''}${project ? ' · ' + project.title : ''}`);
+    }
+  };
+
+  const startTimer = (projectId) => {
+    const project = projects.find(p => p.id === projectId);
+    if (!project) return;
+    if (timer && timer.projectId === projectId) return;
+    if (timer) stopTimer({ silent: true });
+    setTimer({ projectId, startedAt: Date.now() });
+    toast?.(`Timer démarré · ${project.title}`, 'info');
   };
 
   // Raccourci clavier global pour la recherche
@@ -2447,6 +2519,30 @@ function JesseDashboard() {
                 )}
               </div>
               <div className="text-xs text-zinc-500 font-mono">{today.toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: 'long' })}</div>
+              {timer && (() => {
+                const tProject = projects.find(p => p.id === timer.projectId);
+                if (!tProject) return null;
+                return (
+                  <div className="flex items-center rounded-lg border border-amber-500/30 bg-amber-500/10 overflow-hidden">
+                    <button
+                      onClick={() => setSelectedProject(tProject)}
+                      title="Ouvrir le projet en cours de timing"
+                      className="flex items-center gap-2 pl-2 pr-2 py-1 hover:bg-amber-500/15 transition-colors"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse-slow" />
+                      <span className="font-mono text-xs text-amber-200 tabular-nums">{formatElapsed(Date.now() - timer.startedAt)}</span>
+                      <span className="text-[11px] text-amber-300/80 max-w-[160px] truncate">{tProject.title}</span>
+                    </button>
+                    <button
+                      onClick={() => stopTimer()}
+                      title="Arrêter le timer"
+                      className="w-7 h-7 border-l border-amber-500/30 bg-amber-500/15 hover:bg-amber-500/30 text-amber-100 flex items-center justify-center transition-colors"
+                    >
+                      <Square className="w-3 h-3" />
+                    </button>
+                  </div>
+                );
+              })()}
               <div className="relative">
                 <button onClick={() => setShowNotifs(v => !v)} className="w-9 h-9 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center relative transition-colors">
                   <Bell className="w-4 h-4" />
@@ -2490,7 +2586,7 @@ function JesseDashboard() {
         </main>
       </div>
 
-      {selectedProject && <ProjectDetail project={selectedProject} clients={clients} invoices={invoices} onClose={() => setSelectedProject(null)} onUpdate={updateProject} onDelete={deleteProject} onUpdateInvoice={updateInvoice} onDuplicate={duplicateProject} />}
+      {selectedProject && <ProjectDetail project={selectedProject} clients={clients} invoices={invoices} onClose={() => setSelectedProject(null)} onUpdate={updateProject} onDelete={deleteProject} onUpdateInvoice={updateInvoice} onDuplicate={duplicateProject} timer={timer} onStartTimer={startTimer} onStopTimer={stopTimer} />}
       {selectedClient && <ClientDetail client={selectedClient} projects={projects} invoices={invoices} onClose={() => setSelectedClient(null)} onUpdate={updateClient} onDelete={deleteClient} onSelectProject={setSelectedProject} />}
       {showNewProject && <NewProjectModal clients={clients} onClose={() => setShowNewProject(false)} onCreate={createProject} onCreateClient={() => setShowNewClient(true)} />}
       {showNewClient && <NewClientModal onClose={() => setShowNewClient(false)} onCreate={createClient} />}
