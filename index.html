@@ -42,7 +42,8 @@
     "react": "https://esm.sh/react@18.3.1",
     "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
     "lucide-react": "https://esm.sh/lucide-react@0.460.0?deps=react@18.3.1",
-    "recharts": "https://esm.sh/recharts@2.13.0?deps=react@18.3.1"
+    "recharts": "https://esm.sh/recharts@2.13.0?deps=react@18.3.1",
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4"
   }
 }
 </script>
@@ -60,9 +61,17 @@ import {
   Check, Mail, Phone, Building2, Inbox,
   ListTodo, Link2, PlayCircle, Play, Pause, Cloud, MessageSquare, GripVertical,
   Send, HardDrive, Youtube, Square, CheckSquare,
-  Sun, Copy, Files, Zap, ArrowRight
+  Sun, Copy, Files, Zap, ArrowRight, LogIn, LogOut, Lock
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from 'recharts';
+import { createClient } from '@supabase/supabase-js';
+
+// ============ AUTH (Supabase) ============
+const SUPABASE_URL = 'https://qwpleaozgcjegzfzcneo.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_nYDCcbs1amfjw0d1IqZxjg_mGY8En7K';
+const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
+});
 
 // ============ CONFIG ============
 const STAGES = [
@@ -2199,8 +2208,78 @@ const NotificationsPanel = ({ projects, invoices, clients, onSelectProject, onNa
   );
 };
 
+// ============ LOGIN SCREEN ============
+const LoginScreen = () => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    if (error) {
+      setError(error.message === 'Invalid login credentials' ? 'Email ou mot de passe incorrect.' : error.message);
+      setSubmitting(false);
+    }
+    // sur succès, onAuthStateChange déclenche le re-render — pas besoin de stopper submitting
+  };
+
+  return (
+    <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-6 font-body grain">
+      <div className="w-full max-w-sm">
+        <div className="text-center mb-10">
+          <div className="w-14 h-14 bg-amber-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg shadow-amber-500/20">
+            <Film className="w-7 h-7 text-zinc-950" />
+          </div>
+          <div className="font-display text-4xl text-zinc-100 leading-none tracking-tight">Jessy</div>
+          <div className="text-[11px] text-zinc-500 font-mono uppercase tracking-widest mt-2">Studio OS</div>
+        </div>
+        <form onSubmit={submit} className="space-y-3">
+          <div>
+            <label className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest block mb-1.5">Email</label>
+            <input
+              type="email" required autoFocus autoComplete="email"
+              value={email} onChange={e => setEmail(e.target.value)}
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500/50 focus:outline-none transition-colors"
+              placeholder="toi@studio.fr"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest block mb-1.5">Mot de passe</label>
+            <input
+              type="password" required autoComplete="current-password"
+              value={password} onChange={e => setPassword(e.target.value)}
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500/50 focus:outline-none transition-colors"
+              placeholder="••••••••"
+            />
+          </div>
+          {error && (
+            <div className="flex items-start gap-2 text-xs text-rose-300 font-body bg-rose-500/10 border border-rose-500/30 rounded-lg px-3 py-2">
+              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+          <button
+            type="submit" disabled={submitting || !email || !password}
+            className="w-full bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-950 font-medium text-sm px-4 py-2.5 rounded-lg flex items-center justify-center gap-2 transition-colors mt-2"
+          >
+            <LogIn className="w-4 h-4" /> {submitting ? 'Connexion…' : 'Se connecter'}
+          </button>
+        </form>
+        <div className="text-[10px] text-zinc-600 font-mono uppercase tracking-widest text-center mt-10 flex items-center justify-center gap-1.5">
+          <Lock className="w-3 h-3" /> Accès privé
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ============ MAIN APP ============
 function JessyDashboard() {
+  const [session, setSession] = useState(undefined); // undefined = checking, null = unauth, object = authed
   const [activeView, setActiveView] = useState('today');
   const [clients, setClients] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -2219,7 +2298,37 @@ function JessyDashboard() {
   const [, setTick] = useState(0); // force re-render chaque seconde quand un timer tourne
   const toast = useToast();
 
+  // Auth: récupère la session courante puis écoute les changements (login/logout/refresh)
   useEffect(() => {
+    let mounted = true;
+    const hideLoader = () => {
+      const el = document.getElementById('loading');
+      if (el) el.style.display = 'none';
+    };
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setSession(data.session || null);
+      hideLoader();
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
+      if (!mounted) return;
+      setSession(sess || null);
+      hideLoader();
+      // À la déconnexion, on remet l'état UI à zéro pour ne pas garder en mémoire
+      // les vues/sélections du précédent utilisateur si quelqu'un d'autre se loggue.
+      if (!sess) {
+        setSelectedProject(null);
+        setSelectedClient(null);
+        setActiveView('today');
+        setLoading(true);
+      }
+    });
+    return () => { mounted = false; sub.subscription.unsubscribe(); };
+  }, []);
+
+  // Hydrate depuis localStorage uniquement après authentification
+  useEffect(() => {
+    if (!session) return;
     const stored = loadStore();
     const baseClients = stored?.clients || seedClients;
     const baseProjects = (stored?.projects || seedProjects).map(migrateProject);
@@ -2231,13 +2340,11 @@ function JessyDashboard() {
       setTimer(stored.timer);
     }
     setLoading(false);
-    const el = document.getElementById('loading');
-    if (el) el.style.display = 'none';
-  }, []);
+  }, [session]);
 
   useEffect(() => {
-    if (!loading) saveStore({ clients, projects, invoices, timer });
-  }, [clients, projects, invoices, timer, loading]);
+    if (!loading && session) saveStore({ clients, projects, invoices, timer });
+  }, [clients, projects, invoices, timer, loading, session]);
 
   // Tick chaque seconde uniquement si timer actif (sinon laisse le CPU tranquille)
   useEffect(() => {
@@ -2386,7 +2493,13 @@ function JessyDashboard() {
     projects.filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) >= 0 && daysUntil(p.deadline) <= 5).length +
     projects.reduce((s, p) => s + (p.revisionHistory || []).filter(r => r.status === 'pending').length, 0);
 
+  if (session === undefined) return null; // toujours en train de vérifier la session
+  if (!session) return <LoginScreen />;
   if (loading) return null;
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-200 grain font-body">
@@ -2425,8 +2538,15 @@ function JessyDashboard() {
               </div>
               <div className="text-[11px] text-zinc-500 font-body leading-relaxed">Mock activé · webhook prêt à brancher</div>
             </div>
+            <div className="px-2 py-1.5 flex items-center gap-2 text-[11px] text-zinc-500 font-mono truncate">
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0"></div>
+              <span className="truncate">{session?.user?.email}</span>
+            </div>
             <button onClick={() => setConfirmReset(true)} className="w-full flex items-center gap-2 text-[11px] text-zinc-600 hover:text-zinc-300 px-2 py-1.5 transition-colors font-mono">
               <RotateCcw className="w-3 h-3" /> Effacer toutes les données
+            </button>
+            <button onClick={handleLogout} className="w-full flex items-center gap-2 text-[11px] text-zinc-600 hover:text-rose-300 px-2 py-1.5 transition-colors font-mono">
+              <LogOut className="w-3 h-3" /> Se déconnecter
             </button>
           </div>
         </aside>
