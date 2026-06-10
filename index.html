@@ -61,7 +61,8 @@ import {
   Check, Mail, Phone, Building2, Inbox,
   ListTodo, Link2, PlayCircle, Play, Pause, Cloud, MessageSquare, GripVertical,
   Send, HardDrive, Youtube, Square, CheckSquare,
-  Sun, Copy, Files, Zap, ArrowRight, LogIn, LogOut, Lock
+  Sun, Copy, Files, Zap, ArrowRight, LogIn, LogOut, Lock,
+  Shield, UserPlus, MoreVertical, KeyRound, Eye, UserCog, MailPlus, ShieldCheck, ShieldAlert
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from 'recharts';
 import { createClient } from '@supabase/supabase-js';
@@ -79,15 +80,20 @@ const STAGES = [
   { id: 'production', label: 'Production', color: 'amber' },
   { id: 'review', label: 'Validation client', color: 'violet' },
   { id: 'validated', label: 'Validé', color: 'emerald' },
-  { id: 'invoicing', label: 'Facturation', color: 'rose' }
+  { id: 'invoicing', label: 'Facturation', color: 'rose' },
+  { id: 'paid', label: 'Encaissé', color: 'green' }
 ];
+
+// Étapes clôturées : projet sorti du flux de prod (la deadline ne compte plus, plus de tâches en attente).
+const isClosedStage = (id) => id === 'invoicing' || id === 'paid';
 
 const STAGE_COLORS = {
   sky: { bg: 'bg-sky-500/10', text: 'text-sky-300', border: 'border-sky-500/30', dot: 'bg-sky-400' },
   amber: { bg: 'bg-amber-500/10', text: 'text-amber-300', border: 'border-amber-500/30', dot: 'bg-amber-400' },
   violet: { bg: 'bg-violet-500/10', text: 'text-violet-300', border: 'border-violet-500/30', dot: 'bg-violet-400' },
   emerald: { bg: 'bg-emerald-500/10', text: 'text-emerald-300', border: 'border-emerald-500/30', dot: 'bg-emerald-400' },
-  rose: { bg: 'bg-rose-500/10', text: 'text-rose-300', border: 'border-rose-500/30', dot: 'bg-rose-400' }
+  rose: { bg: 'bg-rose-500/10', text: 'text-rose-300', border: 'border-rose-500/30', dot: 'bg-rose-400' },
+  green: { bg: 'bg-green-500/10', text: 'text-green-300', border: 'border-green-500/30', dot: 'bg-green-400' }
 };
 
 const PROJECT_TYPES = ['Publicité', 'Corporate', 'Social Media', 'Clip musical', 'Documentaire', 'Événement', 'Mariage', 'Aftermovie'];
@@ -127,9 +133,19 @@ const guessKind = (url) => {
   return 'other';
 };
 
+// Génération d'identifiants UUID v4 — compatibles avec les colonnes uuid Supabase.
+// Fallback si crypto.randomUUID indisponible (vieux navigateurs / contextes non sécurisés).
+const newId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+};
+
 const buildDefaultTasks = (type) => {
   const labels = TASK_TEMPLATES[type] || ['Brief', 'Production', 'Montage', 'Livraison'];
-  return labels.map((label, i) => ({ id: 't' + Date.now() + '-' + i, label, done: false, order: i }));
+  return labels.map((label, i) => ({ id: newId(), label, done: false, order: i }));
 };
 
 // Copie texte dans le presse-papier (best effort)
@@ -211,14 +227,14 @@ const buildMailto = (email, { subject, body }) => {
 // Duplique un projet : recopie type/budget/notes/tâches mais reset état & dates
 const duplicateProjectData = (project) => ({
   ...project,
-  id: 'p' + Date.now(),
+  id: newId(),
   title: project.title + ' (copie)',
   stage: 'onboarding',
   startDate: today.toISOString().slice(0, 10),
   deadline: dateOffset(14),
   invoicedAmount: 0,
   paidAmount: 0,
-  tasks: (project.tasks || []).map((t, i) => ({ id: 't' + Date.now() + '-' + i, label: t.label, done: false, order: i })),
+  tasks: (project.tasks || []).map((t, i) => ({ id: newId(), label: t.label, done: false, order: i })),
   deliverables: [],
   revisionHistory: [],
   createdAt: today.toISOString().slice(0, 10)
@@ -397,10 +413,10 @@ const TodayView = ({ projects, invoices, clients, onSelectProject, onUpdateProje
     .flatMap(p => (p.revisionHistory || []).filter(r => r.status === 'pending').map(r => ({ project: p, revision: r })))
     .sort((a, b) => new Date(a.revision.date) - new Date(b.revision.date));
   const urgentDeadlines = projects
-    .filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) <= 3)
+    .filter(p => !isClosedStage(p.stage) && daysUntil(p.deadline) <= 3)
     .sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
   const activeWithNextTask = projects
-    .filter(p => p.stage !== 'invoicing' && p.stage !== 'validated' && nextPendingTask(p))
+    .filter(p => !isClosedStage(p.stage) && p.stage !== 'validated' && nextPendingTask(p))
     .sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
 
   const total = overdueInvoices.length + pendingRevisions.length + urgentDeadlines.length;
@@ -622,7 +638,7 @@ const TodayView = ({ projects, invoices, clients, onSelectProject, onUpdateProje
 
 // ============ DASHBOARD VIEW ============
 const DashboardView = ({ projects, invoices, clients, onSelectProject, onNewProject }) => {
-  const activeProjects = projects.filter(p => p.stage !== 'invoicing' || p.invoicedAmount > p.paidAmount);
+  const activeProjects = projects.filter(p => !isClosedStage(p.stage) || p.invoicedAmount > p.paidAmount);
   const totalPaid = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.amount, 0);
   const totalPending = invoices.filter(i => i.status === 'pending').reduce((s, i) => s + i.amount, 0);
   const totalOverdue = invoices.filter(i => i.status === 'overdue').reduce((s, i) => s + i.amount, 0);
@@ -634,7 +650,7 @@ const DashboardView = ({ projects, invoices, clients, onSelectProject, onNewProj
   }));
 
   const upcomingDeadlines = [...projects]
-    .filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) >= -3 && daysUntil(p.deadline) <= 21)
+    .filter(p => !isClosedStage(p.stage) && daysUntil(p.deadline) >= -3 && daysUntil(p.deadline) <= 21)
     .sort((a, b) => new Date(a.deadline) - new Date(b.deadline))
     .slice(0, 6);
 
@@ -682,7 +698,7 @@ const DashboardView = ({ projects, invoices, clients, onSelectProject, onNewProj
           <h2 className="font-display text-xl text-zinc-100">Pipeline</h2>
           <span className="text-xs text-zinc-500 font-mono">{projects.length} projets</span>
         </div>
-        <div className="grid grid-cols-5 gap-3">
+        <div className="grid grid-cols-6 gap-3">
           {pipeline.map(s => {
             const c = STAGE_COLORS[s.color];
             return (
@@ -782,7 +798,7 @@ const ProjectsView = ({ projects, clients, onSelectProject, onNewProject, search
         </div>
       </div>
 
-      <div className="grid grid-cols-5 gap-3 min-h-[60vh]">
+      <div className="grid grid-cols-6 gap-3 min-h-[60vh]">
         {STAGES.map(stage => {
           const c = STAGE_COLORS[stage.color];
           const stageProjects = filtered.filter(p => p.stage === stage.id);
@@ -813,8 +829,8 @@ const ProjectsView = ({ projects, clients, onSelectProject, onNewProject, search
                 {stageProjects.map(p => {
                   const client = clients.find(cl => cl.id === p.clientId);
                   const days = daysUntil(p.deadline);
-                  const urgent = days <= 3 && days >= 0 && p.stage !== 'invoicing';
-                  const overdue = days < 0 && p.stage !== 'invoicing';
+                  const urgent = days <= 3 && days >= 0 && !isClosedStage(p.stage);
+                  const overdue = days < 0 && !isClosedStage(p.stage);
                   return (
                     <div
                       key={p.id}
@@ -1206,7 +1222,7 @@ const ProjectTasks = ({ project, onUpdate }) => {
   };
   const addTask = () => {
     if (!newLabel.trim()) return;
-    const newTask = { id: 't' + Date.now(), label: newLabel.trim(), done: false, order: tasks.length };
+    const newTask = { id: newId(), label: newLabel.trim(), done: false, order: tasks.length };
     onUpdate({ ...project, tasks: [...tasks, newTask] });
     setNewLabel('');
   };
@@ -1294,7 +1310,7 @@ const ProjectDeliverables = ({ project, client, onUpdate }) => {
   const submit = () => {
     if (!draft.url.trim()) return;
     const kind = draft.kind === 'auto' ? guessKind(draft.url) : draft.kind;
-    const item = { id: 'd' + Date.now(), kind, label: draft.label.trim() || DELIVERABLE_KINDS[kind].label, url: draft.url.trim(), createdAt: today.toISOString().slice(0, 10) };
+    const item = { id: newId(), kind, label: draft.label.trim() || DELIVERABLE_KINDS[kind].label, url: draft.url.trim(), createdAt: today.toISOString().slice(0, 10) };
     onUpdate({ ...project, deliverables: [...deliverables, item] });
     setDraft({ url: '', label: '', kind: 'frameio' });
     setShowAdd(false);
@@ -1417,7 +1433,7 @@ const ProjectRevisions = ({ project, client, onUpdate }) => {
 
   const submit = () => {
     if (!draft.feedback.trim()) return;
-    const item = { id: 'r' + Date.now(), round: nextRound, date: today.toISOString().slice(0, 10), feedback: draft.feedback.trim(), status: 'pending' };
+    const item = { id: newId(), round: nextRound, date: today.toISOString().slice(0, 10), feedback: draft.feedback.trim(), status: 'pending' };
     onUpdate({ ...project, revisionHistory: [...history, item] });
     setDraft({ feedback: '' });
     setShowAdd(false);
@@ -1522,7 +1538,13 @@ const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete
   const advanceStage = () => {
     if (stageIdx < STAGES.length - 1) {
       const next = STAGES[stageIdx + 1];
-      onUpdate({ ...project, stage: next.id }, { toast: `→ ${next.label}` });
+      const patch = { ...project, stage: next.id };
+      if (next.id === 'paid') {
+        // Encaissé = soldé : on aligne facturé/encaissé sur le budget.
+        patch.invoicedAmount = Math.max(project.invoicedAmount || 0, project.budget);
+        patch.paidAmount = project.budget;
+      }
+      onUpdate(patch, { toast: `→ ${next.label}` });
     }
   };
   const previousStage = () => {
@@ -1762,7 +1784,7 @@ const NewProjectModal = ({ clients, onClose, onCreate, onCreateClient }) => {
       return;
     }
     onCreate({
-      id: 'p' + Date.now(),
+      id: newId(),
       ...data,
       stage: 'onboarding',
       invoicedAmount: 0,
@@ -1860,7 +1882,7 @@ const NewClientModal = ({ onClose, onCreate }) => {
       toast?.('Société et contact sont requis', 'error');
       return;
     }
-    onCreate({ id: 'c' + Date.now(), ...data, createdAt: today.toISOString().slice(0, 10) });
+    onCreate({ id: newId(), ...data, createdAt: today.toISOString().slice(0, 10) });
     onClose();
   };
   return (
@@ -2042,7 +2064,7 @@ const NewInvoiceModal = ({ projects, clients, invoices, onClose, onCreate }) => 
       return;
     }
     onCreate({
-      id: 'i' + Date.now(),
+      id: newId(),
       number: nextNumber,
       projectId: data.projectId,
       clientId: project.clientId,
@@ -2109,10 +2131,10 @@ const NotificationsPanel = ({ projects, invoices, clients, onSelectProject, onNa
 
   const overdueInvoices = invoices.filter(i => i.status === 'overdue');
   const upcomingDeadlines = projects
-    .filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) >= 0 && daysUntil(p.deadline) <= 5)
+    .filter(p => !isClosedStage(p.stage) && daysUntil(p.deadline) >= 0 && daysUntil(p.deadline) <= 5)
     .sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
   const overdueProjects = projects
-    .filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) < 0);
+    .filter(p => !isClosedStage(p.stage) && daysUntil(p.deadline) < 0);
   const pendingRevisions = projects
     .flatMap(p => (p.revisionHistory || []).filter(r => r.status === 'pending').map(r => ({ project: p, revision: r })))
     .sort((a, b) => new Date(a.revision.date) - new Date(b.revision.date));
@@ -2277,6 +2299,740 @@ const LoginScreen = () => {
   );
 };
 
+// ============ TEAM (ADMIN) ============
+// Wrapper qui appelle l'edge function `team-admin`. Toujours envoyer le JWT.
+const callTeamAdmin = async (action, payload = {}) => {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData?.session?.access_token;
+  if (!token) throw new Error('Session expirée — reconnecte-toi');
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/team-admin`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      'apikey': SUPABASE_PUBLISHABLE_KEY
+    },
+    body: JSON.stringify({ action, ...payload })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Erreur ${res.status}`);
+  return data;
+};
+
+const ROLE_META = {
+  admin:  { label: 'Admin',  color: 'amber',   desc: 'Gère l’équipe et accède à tout' },
+  member: { label: 'Membre', color: 'sky',     desc: 'Crée et modifie projets, clients, factures' },
+  viewer: { label: 'Lecture',color: 'zinc',    desc: 'Consulte uniquement, sans modifier' }
+};
+const ROLE_BADGE = {
+  amber: 'bg-amber-500/15 text-amber-200 border-amber-500/30',
+  sky:   'bg-sky-500/15 text-sky-200 border-sky-500/30',
+  zinc:  'bg-zinc-700/40 text-zinc-300 border-zinc-600/60'
+};
+
+const RoleBadge = ({ role }) => {
+  const meta = ROLE_META[role] || ROLE_META.member;
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono uppercase tracking-wider border ${ROLE_BADGE[meta.color]}`}>
+      <Shield className="w-2.5 h-2.5" /> {meta.label}
+    </span>
+  );
+};
+
+const fmtRelativeOrDash = (s) => {
+  if (!s) return '—';
+  const d = new Date(s);
+  const days = Math.floor((today - d) / 86400000);
+  if (days < 1) return "aujourd'hui";
+  if (days < 2) return 'hier';
+  if (days < 7) return `il y a ${days}j`;
+  if (days < 30) return `il y a ${Math.floor(days / 7)}sem.`;
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
+// ----- TeamView -----
+const TeamView = ({ currentUserId, onChanged }) => {
+  const [users, setUsers] = useState([]);
+  const [loadingTeam, setLoadingTeam] = useState(true);
+  const [errMsg, setErrMsg] = useState(null);
+  const [showInvite, setShowInvite] = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [resetTarget, setResetTarget] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const toast = useToast();
+
+  const fetchUsers = useCallback(async () => {
+    setLoadingTeam(true); setErrMsg(null);
+    try {
+      const { users } = await callTeamAdmin('list_users');
+      const sorted = [...users].sort((a, b) => (a.email || '').localeCompare(b.email || ''));
+      setUsers(sorted);
+    } catch (e) { setErrMsg(e.message); }
+    finally { setLoadingTeam(false); }
+  }, []);
+
+  useEffect(() => { fetchUsers(); }, [fetchUsers]);
+
+  const onUserSaved = () => { fetchUsers(); onChanged?.(); };
+
+  const handleDelete = async (u) => {
+    try {
+      await callTeamAdmin('delete_user', { userId: u.id });
+      toast?.(`${u.email} supprimé`, 'info');
+      setConfirmDelete(null);
+      fetchUsers();
+    } catch (e) { toast?.(e.message, 'error'); }
+  };
+
+  const counts = useMemo(() => ({
+    admin:  users.filter(u => u.role === 'admin').length,
+    member: users.filter(u => u.role === 'member').length,
+    viewer: users.filter(u => u.role === 'viewer').length
+  }), [users]);
+
+  return (
+    <div className="max-w-5xl mx-auto animate-in">
+      <div className="flex items-start justify-between mb-6 gap-4">
+        <div>
+          <h1 className="font-display text-3xl text-zinc-100 mb-1">Équipe</h1>
+          <p className="text-sm text-zinc-500">Gère les membres et leurs rôles. Les admins voient cette page.</p>
+        </div>
+        <button
+          onClick={() => setShowInvite(true)}
+          className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-amber-400 text-zinc-950 hover:bg-amber-300 text-sm font-medium transition-colors"
+        >
+          <UserPlus className="w-4 h-4" /> Nouveau membre
+        </button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        {(['admin', 'member', 'viewer']).map(r => {
+          const meta = ROLE_META[r];
+          return (
+            <div key={r} className="bg-zinc-900/60 border border-zinc-800/80 rounded-lg p-4">
+              <div className="flex items-center justify-between mb-1.5">
+                <RoleBadge role={r} />
+                <span className="font-display text-2xl text-zinc-100 tabular-nums">{counts[r]}</span>
+              </div>
+              <div className="text-xs text-zinc-500 leading-relaxed">{meta.desc}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {errMsg && (
+        <div className="mb-4 px-4 py-3 rounded-lg border border-rose-500/40 bg-rose-500/10 text-rose-200 text-sm flex items-center gap-2">
+          <AlertCircle className="w-4 h-4" /> {errMsg}
+          <button onClick={fetchUsers} className="ml-auto text-rose-100 underline text-xs">Réessayer</button>
+        </div>
+      )}
+
+      <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-lg overflow-hidden">
+        <div className="grid grid-cols-[1.6fr_1fr_1fr_1fr_auto] gap-3 px-4 py-2.5 border-b border-zinc-800/80 text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
+          <div>Membre</div>
+          <div>Rôle</div>
+          <div>Statut</div>
+          <div>Dernière connexion</div>
+          <div></div>
+        </div>
+        {loadingTeam ? (
+          <div className="px-4 py-10 text-center text-sm text-zinc-500">Chargement…</div>
+        ) : users.length === 0 ? (
+          <div className="px-4 py-10 text-center text-sm text-zinc-500">Aucun membre — invite quelqu'un pour démarrer.</div>
+        ) : users.map(u => {
+          const isMe = u.id === currentUserId;
+          return (
+            <div key={u.id} className="grid grid-cols-[1.6fr_1fr_1fr_1fr_auto] gap-3 px-4 py-3 border-b border-zinc-800/40 last:border-0 items-center hover:bg-zinc-900/40 transition-colors">
+              <div className="min-w-0">
+                <div className="text-sm text-zinc-100 truncate flex items-center gap-2">
+                  {u.name || u.email.split('@')[0]}
+                  {isMe && <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">(toi)</span>}
+                </div>
+                <div className="text-xs text-zinc-500 truncate font-mono">{u.email}</div>
+              </div>
+              <div><RoleBadge role={u.role} /></div>
+              <div className="text-xs text-zinc-400">
+                {u.invited ? <span className="text-amber-300">Invitation envoyée</span>
+                  : u.lastSignInAt ? <span className="text-emerald-300">Actif</span>
+                  : <span className="text-zinc-500">Jamais connecté</span>}
+              </div>
+              <div className="text-xs text-zinc-500 font-mono">{fmtRelativeOrDash(u.lastSignInAt)}</div>
+              <div className="flex items-center gap-1 justify-end">
+                <button
+                  onClick={() => setEditTarget(u)}
+                  title="Modifier rôle / nom"
+                  className="w-8 h-8 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 flex items-center justify-center transition-colors"
+                ><UserCog className="w-4 h-4" /></button>
+                <button
+                  onClick={() => setResetTarget(u)}
+                  title="Reset mot de passe"
+                  className="w-8 h-8 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 flex items-center justify-center transition-colors"
+                ><KeyRound className="w-4 h-4" /></button>
+                <button
+                  onClick={() => setConfirmDelete(u)}
+                  disabled={isMe}
+                  title={isMe ? 'Tu ne peux pas te supprimer toi-même' : 'Supprimer'}
+                  className="w-8 h-8 rounded-md text-zinc-400 hover:text-rose-300 hover:bg-rose-500/10 disabled:text-zinc-700 disabled:hover:bg-transparent disabled:cursor-not-allowed flex items-center justify-center transition-colors"
+                ><Trash2 className="w-4 h-4" /></button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {showInvite && <NewMemberModal onClose={() => setShowInvite(false)} onCreated={onUserSaved} />}
+      {editTarget && <EditMemberModal user={editTarget} currentUserId={currentUserId} onClose={() => setEditTarget(null)} onSaved={onUserSaved} />}
+      {resetTarget && <ResetPasswordModal user={resetTarget} onClose={() => setResetTarget(null)} />}
+      <ConfirmModal
+        open={!!confirmDelete}
+        title={`Supprimer ${confirmDelete?.email} ?`}
+        message="Le compte sera supprimé définitivement. Cette action est irréversible."
+        confirmLabel="Supprimer"
+        danger
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={() => handleDelete(confirmDelete)}
+      />
+    </div>
+  );
+};
+
+// ----- NewMemberModal (invitation OU création directe) -----
+const NewMemberModal = ({ onClose, onCreated }) => {
+  const [mode, setMode] = useState('invite'); // 'invite' | 'direct'
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [role, setRole] = useState('member');
+  const [password, setPassword] = useState('');
+  const [showPwd, setShowPwd] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const toast = useToast();
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    if (!email.trim()) return setError('Email requis');
+    if (mode === 'direct' && password.length < 8) return setError('Mot de passe : 8 caractères minimum');
+    setSubmitting(true);
+    try {
+      if (mode === 'invite') {
+        await callTeamAdmin('invite_user', {
+          email: email.trim(), name: name.trim() || null, role,
+          redirectTo: window.location.origin + window.location.pathname
+        });
+        toast?.(`Invitation envoyée à ${email}`);
+      } else {
+        await callTeamAdmin('create_user', {
+          email: email.trim(), password, name: name.trim() || null, role
+        });
+        toast?.(`Compte créé pour ${email}`);
+      }
+      onCreated?.();
+      onClose();
+    } catch (e) { setError(e.message); }
+    finally { setSubmitting(false); }
+  };
+
+  return (
+    <ModalShell onClose={onClose}>
+      <form onSubmit={submit} className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-md p-6 space-y-4 animate-in" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between">
+          <div>
+            <h3 className="font-display text-2xl text-zinc-100">Nouveau membre</h3>
+            <p className="text-xs text-zinc-500 mt-1">Ajoute un membre à l'équipe</p>
+          </div>
+          <button type="button" onClick={onClose} className="text-zinc-500 hover:text-zinc-200"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 p-1 bg-zinc-950 border border-zinc-800 rounded-lg">
+          <button type="button" onClick={() => setMode('invite')}
+            className={`flex items-center justify-center gap-2 px-3 py-2 rounded-md text-xs font-medium transition-colors ${mode === 'invite' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'}`}>
+            <MailPlus className="w-3.5 h-3.5" /> Inviter par email
+          </button>
+          <button type="button" onClick={() => setMode('direct')}
+            className={`flex items-center justify-center gap-2 px-3 py-2 rounded-md text-xs font-medium transition-colors ${mode === 'direct' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'}`}>
+            <KeyRound className="w-3.5 h-3.5" /> Définir un mot de passe
+          </button>
+        </div>
+
+        <div>
+          <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">Email</label>
+          <input type="email" autoFocus required value={email} onChange={e => setEmail(e.target.value)}
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-600 focus:outline-none" placeholder="prenom@studio.fr" />
+        </div>
+
+        <div>
+          <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">Nom (optionnel)</label>
+          <input type="text" value={name} onChange={e => setName(e.target.value)}
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-600 focus:outline-none" placeholder="Prénom Nom" />
+        </div>
+
+        <div>
+          <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">Rôle</label>
+          <div className="grid grid-cols-3 gap-2">
+            {(['admin', 'member', 'viewer']).map(r => {
+              const meta = ROLE_META[r];
+              const active = role === r;
+              return (
+                <button key={r} type="button" onClick={() => setRole(r)}
+                  className={`px-3 py-2 rounded-lg border text-xs font-medium transition-colors ${active ? ROLE_BADGE[meta.color] : 'border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'}`}>
+                  {meta.label}
+                </button>
+              );
+            })}
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-1.5">{ROLE_META[role].desc}</div>
+        </div>
+
+        {mode === 'direct' && (
+          <div>
+            <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">Mot de passe</label>
+            <div className="relative">
+              <input type={showPwd ? 'text' : 'password'} required value={password} onChange={e => setPassword(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 pr-10 text-sm font-mono focus:border-zinc-600 focus:outline-none" placeholder="Min. 8 caractères" />
+              <button type="button" onClick={() => setShowPwd(v => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-200">
+                <Eye className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="text-[11px] text-zinc-500 mt-1.5">Communique-le par un canal sécurisé hors de cette app.</div>
+          </div>
+        )}
+
+        {error && <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-md px-3 py-2">{error}</div>}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-zinc-400 hover:text-zinc-100 transition-colors">Annuler</button>
+          <button type="submit" disabled={submitting} className="px-4 py-2 rounded-lg bg-amber-400 text-zinc-950 hover:bg-amber-300 disabled:opacity-50 text-sm font-medium transition-colors">
+            {submitting ? '…' : mode === 'invite' ? 'Envoyer l’invitation' : 'Créer le compte'}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+};
+
+// ----- EditMemberModal (rôle + nom) -----
+const EditMemberModal = ({ user, currentUserId, onClose, onSaved }) => {
+  const [role, setRole] = useState(user.role);
+  const [name, setName] = useState(user.name || '');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const toast = useToast();
+  const isMe = user.id === currentUserId;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(null); setSubmitting(true);
+    try {
+      const promises = [];
+      if ((name || '') !== (user.name || '')) {
+        promises.push(callTeamAdmin('update_user_name', { userId: user.id, name: name.trim() || null }));
+      }
+      if (role !== user.role) {
+        promises.push(callTeamAdmin('update_user_role', { userId: user.id, role }));
+      }
+      if (promises.length === 0) { onClose(); return; }
+      await Promise.all(promises);
+      toast?.('Membre mis à jour');
+      onSaved?.();
+      onClose();
+    } catch (e) { setError(e.message); }
+    finally { setSubmitting(false); }
+  };
+
+  return (
+    <ModalShell onClose={onClose}>
+      <form onSubmit={submit} className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-md p-6 space-y-4 animate-in" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between">
+          <div>
+            <h3 className="font-display text-2xl text-zinc-100">Modifier le membre</h3>
+            <p className="text-xs text-zinc-500 mt-1 font-mono">{user.email}</p>
+          </div>
+          <button type="button" onClick={onClose} className="text-zinc-500 hover:text-zinc-200"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div>
+          <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">Nom</label>
+          <input type="text" value={name} onChange={e => setName(e.target.value)}
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-600 focus:outline-none" placeholder="Prénom Nom" />
+        </div>
+
+        <div>
+          <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">Rôle</label>
+          <div className="grid grid-cols-3 gap-2">
+            {(['admin', 'member', 'viewer']).map(r => {
+              const meta = ROLE_META[r];
+              const active = role === r;
+              const blocked = isMe && r !== 'admin';
+              return (
+                <button key={r} type="button" onClick={() => !blocked && setRole(r)} disabled={blocked}
+                  title={blocked ? 'Tu ne peux pas te retirer le rôle admin' : ''}
+                  className={`px-3 py-2 rounded-lg border text-xs font-medium transition-colors ${active ? ROLE_BADGE[meta.color] : 'border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'} ${blocked ? 'opacity-40 cursor-not-allowed' : ''}`}>
+                  {meta.label}
+                </button>
+              );
+            })}
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-1.5">{ROLE_META[role].desc}</div>
+        </div>
+
+        {error && <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-md px-3 py-2">{error}</div>}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-zinc-400 hover:text-zinc-100 transition-colors">Annuler</button>
+          <button type="submit" disabled={submitting} className="px-4 py-2 rounded-lg bg-amber-400 text-zinc-950 hover:bg-amber-300 disabled:opacity-50 text-sm font-medium transition-colors">
+            {submitting ? '…' : 'Enregistrer'}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+};
+
+// ----- ResetPasswordModal -----
+const ResetPasswordModal = ({ user, onClose }) => {
+  const [pwd, setPwd] = useState('');
+  const [showPwd, setShowPwd] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const toast = useToast();
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    if (pwd.length < 8) return setError('Mot de passe : 8 caractères minimum');
+    setSubmitting(true);
+    try {
+      await callTeamAdmin('reset_password', { userId: user.id, newPassword: pwd });
+      toast?.(`Mot de passe réinitialisé pour ${user.email}`);
+      onClose();
+    } catch (e) { setError(e.message); }
+    finally { setSubmitting(false); }
+  };
+
+  return (
+    <ModalShell onClose={onClose}>
+      <form onSubmit={submit} className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-md p-6 space-y-4 animate-in" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between">
+          <div>
+            <h3 className="font-display text-2xl text-zinc-100">Reset mot de passe</h3>
+            <p className="text-xs text-zinc-500 mt-1 font-mono">{user.email}</p>
+          </div>
+          <button type="button" onClick={onClose} className="text-zinc-500 hover:text-zinc-200"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div>
+          <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">Nouveau mot de passe</label>
+          <div className="relative">
+            <input type={showPwd ? 'text' : 'password'} autoFocus required value={pwd} onChange={e => setPwd(e.target.value)}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 pr-10 text-sm font-mono focus:border-zinc-600 focus:outline-none" placeholder="Min. 8 caractères" />
+            <button type="button" onClick={() => setShowPwd(v => !v)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-200">
+              <Eye className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-1.5">Communique-le par un canal sécurisé.</div>
+        </div>
+
+        {error && <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-md px-3 py-2">{error}</div>}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-zinc-400 hover:text-zinc-100 transition-colors">Annuler</button>
+          <button type="submit" disabled={submitting} className="px-4 py-2 rounded-lg bg-amber-400 text-zinc-950 hover:bg-amber-300 disabled:opacity-50 text-sm font-medium transition-colors">
+            {submitting ? '…' : 'Réinitialiser'}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+};
+
+// ============ CRYPTSTORE (Supabase data layer) ============
+// Service object: mappers camelCase ↔ snake_case + CRUD ciblé par mutation.
+// L'UI fait des optimistic updates (useState immédiat) puis appelle le store en BG.
+// Les ids sont des UUID générés côté JS (newId).
+
+const dateOnly = (s) => s ? String(s).slice(0, 10) : null;
+const num = (n) => (n == null || n === '') ? 0 : Number(n);
+const groupBy = (arr, key) => (arr || []).reduce((acc, x) => {
+  (acc[x[key]] ||= []).push(x); return acc;
+}, {});
+
+const cryptStore = {
+  // ---- Mappers ----
+  clientToDB: (c) => ({
+    id: c.id, company: c.company, name: c.name,
+    email: c.email || null, phone: c.phone || null
+  }),
+  clientFromDB: (r) => ({
+    id: r.id, company: r.company, name: r.name,
+    email: r.email || '', phone: r.phone || '',
+    createdAt: dateOnly(r.created_at)
+  }),
+
+  projectToDB: (p, opts = {}) => {
+    const o = {
+      id: p.id, title: p.title, client_id: p.clientId, type: p.type,
+      stage: p.stage, budget: num(p.budget),
+      start_date: dateOnly(p.startDate), deadline: dateOnly(p.deadline),
+      notes: p.notes || '',
+      invoiced_amount: num(p.invoicedAmount),
+      paid_amount: num(p.paidAmount),
+      hours_logged: num(p.hoursLogged)
+    };
+    if (opts.excludeId) delete o.id;
+    return o;
+  },
+  projectFromDB: (r, tasks, delivs, revs) => ({
+    id: r.id, title: r.title, clientId: r.client_id,
+    type: r.type, stage: r.stage,
+    budget: num(r.budget),
+    startDate: dateOnly(r.start_date), deadline: dateOnly(r.deadline),
+    notes: r.notes || '',
+    invoicedAmount: num(r.invoiced_amount),
+    paidAmount: num(r.paid_amount),
+    hoursLogged: num(r.hours_logged),
+    createdAt: dateOnly(r.created_at),
+    tasks: (tasks || []).slice().sort((a,b) => a.sort_order - b.sort_order)
+      .map(t => ({ id: t.id, label: t.label, done: !!t.done, order: t.sort_order })),
+    deliverables: (delivs || []).map(d => ({
+      id: d.id, kind: d.kind, label: d.label, url: d.url, createdAt: dateOnly(d.created_at)
+    })),
+    revisionHistory: (revs || []).slice().sort((a,b) => a.round - b.round)
+      .map(r => ({ id: r.id, round: r.round, date: dateOnly(r.date), feedback: r.feedback, status: r.status }))
+  }),
+
+  taskToDB: (t, projectId) => ({
+    id: t.id, project_id: projectId, label: t.label,
+    done: !!t.done, sort_order: t.order ?? 0
+  }),
+  deliverableToDB: (d, projectId) => ({
+    id: d.id, project_id: projectId,
+    kind: d.kind || 'other', label: d.label, url: d.url
+  }),
+  revisionToDB: (r, projectId) => ({
+    id: r.id, project_id: projectId, round: r.round,
+    date: dateOnly(r.date), feedback: r.feedback || '',
+    status: r.status || 'pending'
+  }),
+
+  invoiceToDB: (i, opts = {}) => {
+    const o = {
+      id: i.id, number: i.number,
+      project_id: i.projectId, client_id: i.clientId,
+      amount: num(i.amount), status: i.status || 'pending',
+      issue_date: dateOnly(i.issueDate), due_date: dateOnly(i.dueDate),
+      paid_date: dateOnly(i.paidDate),
+      ghl_link: i.ghlLink || null
+    };
+    if (opts.excludeId) delete o.id;
+    return o;
+  },
+  invoiceFromDB: (r) => ({
+    id: r.id, number: r.number,
+    projectId: r.project_id, clientId: r.client_id,
+    amount: num(r.amount), status: r.status,
+    issueDate: dateOnly(r.issue_date),
+    dueDate: dateOnly(r.due_date),
+    paidDate: dateOnly(r.paid_date),
+    ghlLink: r.ghl_link || ''
+  }),
+
+  // ---- Hydrate (charge tout en parallèle) ----
+  async hydrate() {
+    const [c, p, t, d, r, i, tm] = await Promise.all([
+      supabase.from('clients').select('*'),
+      supabase.from('projects').select('*'),
+      supabase.from('project_tasks').select('*'),
+      supabase.from('project_deliverables').select('*'),
+      supabase.from('project_revisions').select('*'),
+      supabase.from('invoices').select('*'),
+      supabase.from('timers').select('*').limit(1)
+    ]);
+    const errs = [c, p, t, d, r, i, tm].map(x => x.error).filter(Boolean);
+    if (errs.length) throw new Error(errs.map(e => e.message).join(' / '));
+
+    const tasksBy = groupBy(t.data, 'project_id');
+    const delivsBy = groupBy(d.data, 'project_id');
+    const revsBy = groupBy(r.data, 'project_id');
+
+    return {
+      clients: (c.data || []).map(this.clientFromDB),
+      projects: (p.data || []).map(row => this.projectFromDB(
+        row, tasksBy[row.id] || [], delivsBy[row.id] || [], revsBy[row.id] || []
+      )),
+      invoices: (i.data || []).map(this.invoiceFromDB),
+      timer: tm.data?.[0] ? {
+        projectId: tm.data[0].project_id,
+        startedAt: new Date(tm.data[0].started_at).getTime()
+      } : null
+    };
+  },
+
+  // ---- CRUD ----
+  async createClient(c) {
+    const { error } = await supabase.from('clients').insert(this.clientToDB(c));
+    if (error) throw error;
+  },
+  async updateClient(c) {
+    const { error } = await supabase.from('clients').update(this.clientToDB(c)).eq('id', c.id);
+    if (error) throw error;
+  },
+  async deleteClient(id) {
+    const { error } = await supabase.from('clients').delete().eq('id', id);
+    if (error) throw error;
+  },
+
+  async createProject(p) {
+    const { error } = await supabase.from('projects').insert(this.projectToDB(p));
+    if (error) throw error;
+    if (p.tasks?.length) {
+      const { error: e } = await supabase.from('project_tasks').insert(p.tasks.map(t => this.taskToDB(t, p.id)));
+      if (e) throw e;
+    }
+    if (p.deliverables?.length) {
+      const { error: e } = await supabase.from('project_deliverables').insert(p.deliverables.map(d => this.deliverableToDB(d, p.id)));
+      if (e) throw e;
+    }
+    if (p.revisionHistory?.length) {
+      const { error: e } = await supabase.from('project_revisions').insert(p.revisionHistory.map(r => this.revisionToDB(r, p.id)));
+      if (e) throw e;
+    }
+  },
+  // updateProject: replace les sub-collections (delete + insert).
+  // Suffisant pour ce volume (< 50 sub-rows par projet) ; à optimiser si besoin.
+  async updateProject(p) {
+    const { error } = await supabase.from('projects')
+      .update(this.projectToDB(p, { excludeId: true })).eq('id', p.id);
+    if (error) throw error;
+
+    await supabase.from('project_tasks').delete().eq('project_id', p.id);
+    if (p.tasks?.length) {
+      const { error: e } = await supabase.from('project_tasks').insert(p.tasks.map(t => this.taskToDB(t, p.id)));
+      if (e) throw e;
+    }
+    await supabase.from('project_deliverables').delete().eq('project_id', p.id);
+    if (p.deliverables?.length) {
+      const { error: e } = await supabase.from('project_deliverables').insert(p.deliverables.map(d => this.deliverableToDB(d, p.id)));
+      if (e) throw e;
+    }
+    await supabase.from('project_revisions').delete().eq('project_id', p.id);
+    if (p.revisionHistory?.length) {
+      const { error: e } = await supabase.from('project_revisions').insert(p.revisionHistory.map(r => this.revisionToDB(r, p.id)));
+      if (e) throw e;
+    }
+  },
+  async deleteProject(id) {
+    const { error } = await supabase.from('projects').delete().eq('id', id);
+    if (error) throw error;
+  },
+  // patchProjectAmounts: mise à jour ciblée des montants (utilisé par les sync invoices).
+  async patchProjectAmounts(id, patch) {
+    const allowed = {};
+    if (patch.invoicedAmount != null) allowed.invoiced_amount = num(patch.invoicedAmount);
+    if (patch.paidAmount != null) allowed.paid_amount = num(patch.paidAmount);
+    if (patch.hoursLogged != null) allowed.hours_logged = num(patch.hoursLogged);
+    if (patch.stage != null) allowed.stage = patch.stage;
+    if (Object.keys(allowed).length === 0) return;
+    const { error } = await supabase.from('projects').update(allowed).eq('id', id);
+    if (error) throw error;
+  },
+
+  async createInvoice(i) {
+    const { error } = await supabase.from('invoices').insert(this.invoiceToDB(i));
+    if (error) throw error;
+  },
+  async updateInvoice(i) {
+    const { error } = await supabase.from('invoices')
+      .update(this.invoiceToDB(i, { excludeId: true })).eq('id', i.id);
+    if (error) throw error;
+  },
+  async deleteInvoice(id) {
+    const { error } = await supabase.from('invoices').delete().eq('id', id);
+    if (error) throw error;
+  },
+
+  async setTimer(userId, timer) {
+    if (!timer) {
+      const { error } = await supabase.from('timers').delete().eq('user_id', userId);
+      if (error) throw error;
+      return;
+    }
+    const { error } = await supabase.from('timers').upsert({
+      user_id: userId,
+      project_id: timer.projectId,
+      started_at: new Date(timer.startedAt).toISOString()
+    });
+    if (error) throw error;
+  },
+
+  // ---- Reset complet (utilisé par le bouton "effacer toutes les données") ----
+  async resetAll(userId) {
+    // Cascade fait le boulot : delete clients → tout suit
+    await supabase.from('timers').delete().eq('user_id', userId);
+    await supabase.from('invoices').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    await supabase.from('clients').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    // projects/tasks/deliverables/revisions cascade depuis clients → ok
+  },
+
+  // ---- Import depuis localStorage (au 1er login si DB vide) ----
+  // Remap des ids legacy ('c123' etc.) vers UUIDs et préserve les FK.
+  async importFromLocal(local) {
+    const idMap = {};
+    const remap = (id) => {
+      if (!id) return id;
+      if (!idMap[id]) idMap[id] = newId();
+      return idMap[id];
+    };
+
+    const clients = (local.clients || []).map(c => ({ ...c, id: remap(c.id) }));
+    const projects = (local.projects || []).map(p => ({
+      ...p,
+      id: remap(p.id),
+      clientId: remap(p.clientId),
+      tasks: (p.tasks || []).map(t => ({ ...t, id: remap(t.id) })),
+      deliverables: (p.deliverables || []).map(d => ({ ...d, id: remap(d.id) })),
+      revisionHistory: (p.revisionHistory || []).map(r => ({ ...r, id: remap(r.id) }))
+    }));
+    const invoices = (local.invoices || []).map(i => ({
+      ...i, id: remap(i.id),
+      projectId: remap(i.projectId),
+      clientId: remap(i.clientId)
+    }));
+
+    if (clients.length) {
+      const { error } = await supabase.from('clients').insert(clients.map(c => this.clientToDB(c)));
+      if (error) throw error;
+    }
+    if (projects.length) {
+      const { error } = await supabase.from('projects').insert(projects.map(p => this.projectToDB(p)));
+      if (error) throw error;
+
+      const allTasks = projects.flatMap(p => (p.tasks || []).map(t => this.taskToDB(t, p.id)));
+      if (allTasks.length) {
+        const { error: e } = await supabase.from('project_tasks').insert(allTasks);
+        if (e) throw e;
+      }
+      const allDelivs = projects.flatMap(p => (p.deliverables || []).map(d => this.deliverableToDB(d, p.id)));
+      if (allDelivs.length) {
+        const { error: e } = await supabase.from('project_deliverables').insert(allDelivs);
+        if (e) throw e;
+      }
+      const allRevs = projects.flatMap(p => (p.revisionHistory || []).map(r => this.revisionToDB(r, p.id)));
+      if (allRevs.length) {
+        const { error: e } = await supabase.from('project_revisions').insert(allRevs);
+        if (e) throw e;
+      }
+    }
+    if (invoices.length) {
+      const { error } = await supabase.from('invoices').insert(invoices.map(i => this.invoiceToDB(i)));
+      if (error) throw error;
+    }
+    return { clients, projects, invoices };
+  }
+};
+
 // ============ MAIN APP ============
 function JessyDashboard() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = unauth, object = authed
@@ -2297,6 +3053,17 @@ function JessyDashboard() {
   const [timer, setTimer] = useState(null); // { projectId, startedAt: epoch ms } | null
   const [, setTick] = useState(0); // force re-render chaque seconde quand un timer tourne
   const toast = useToast();
+
+  // Rôle courant — valeur par défaut sûre tant que session n'est pas chargée.
+  // L'UI principale n'est rendue qu'après auth donc le calcul est cohérent au render.
+  const currentRole = (session?.user?.user_metadata?.role) || 'member';
+  const isAdmin = currentRole === 'admin';
+  const isViewer = currentRole === 'viewer';
+  const blockIfViewer = (label) => {
+    if (!isViewer) return false;
+    toast?.(`${label} indisponible en lecture seule`, 'error');
+    return true;
+  };
 
   // Auth: récupère la session courante puis écoute les changements (login/logout/refresh)
   useEffect(() => {
@@ -2326,25 +3093,82 @@ function JessyDashboard() {
     return () => { mounted = false; sub.subscription.unsubscribe(); };
   }, []);
 
-  // Hydrate depuis localStorage uniquement après authentification
+  // Hydrate depuis Supabase. Au 1er login, si la DB est vide ET le localStorage
+  // contient des données legacy, on les importe automatiquement.
   useEffect(() => {
     if (!session) return;
-    const stored = loadStore();
-    const baseClients = stored?.clients || seedClients;
-    const baseProjects = (stored?.projects || seedProjects).map(migrateProject);
-    const baseInvoices = reconcileInvoiceStatus(stored?.invoices || seedInvoices);
-    setClients(baseClients);
-    setProjects(baseProjects);
-    setInvoices(baseInvoices);
-    if (stored?.timer && typeof stored.timer.startedAt === 'number' && stored.timer.projectId) {
-      setTimer(stored.timer);
-    }
-    setLoading(false);
+    let cancelled = false;
+    (async () => {
+      try {
+        let { clients: c, projects: p, invoices: i, timer: tm } = await cryptStore.hydrate();
+        if (cancelled) return;
+
+        const stored = loadStore();
+        const dbEmpty = c.length === 0 && p.length === 0 && i.length === 0;
+        const hasLegacy = stored && (
+          (stored.clients?.length || 0) +
+          (stored.projects?.length || 0) +
+          (stored.invoices?.length || 0)
+        ) > 0;
+
+        if (dbEmpty && hasLegacy && !isViewer) {
+          toast?.('Import des données locales vers Supabase…', 'info');
+          try {
+            await cryptStore.importFromLocal({
+              clients: stored.clients || [],
+              projects: (stored.projects || []).map(migrateProject),
+              invoices: stored.invoices || []
+            });
+            const fresh = await cryptStore.hydrate();
+            if (cancelled) return;
+            c = fresh.clients; p = fresh.projects; i = fresh.invoices; tm = fresh.timer;
+            // Backup : on renomme l'ancienne clé pour pouvoir restaurer manuellement si besoin
+            try { localStorage.setItem(STORAGE_KEY + '-imported-' + Date.now(), localStorage.getItem(STORAGE_KEY) || ''); } catch {}
+            try { localStorage.removeItem(STORAGE_KEY); } catch {}
+            toast?.(`Importé : ${c.length} clients, ${p.length} projets, ${i.length} factures`, 'success');
+          } catch (e) {
+            console.error('Import localStorage échoué', e);
+            toast?.(`Import échoué : ${e.message}`, 'error');
+          }
+        }
+
+        setClients(c);
+        setProjects(p.map(migrateProject));
+        setInvoices(reconcileInvoiceStatus(i));
+        setTimer(tm);
+        setLoading(false);
+      } catch (e) {
+        if (cancelled) return;
+        console.error('Hydrate Supabase échoué', e);
+        toast?.(`Chargement Supabase échoué : ${e.message}`, 'error');
+        // Fallback : on charge depuis localStorage pour ne pas bloquer l'app.
+        const stored = loadStore();
+        setClients(stored?.clients || []);
+        setProjects((stored?.projects || []).map(migrateProject));
+        setInvoices(reconcileInvoiceStatus(stored?.invoices || []));
+        if (stored?.timer && typeof stored.timer.startedAt === 'number' && stored.timer.projectId) {
+          setTimer(stored.timer);
+        }
+        setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
   }, [session]);
 
+  // Cache localStorage en backup (pas la source de vérité). Permet une lecture instantanée
+  // au reload si Supabase est lent ou indisponible.
   useEffect(() => {
     if (!loading && session) saveStore({ clients, projects, invoices, timer });
   }, [clients, projects, invoices, timer, loading, session]);
+
+  // Helper : enveloppe un appel cryptStore. Si erreur réseau/RLS, on toast ;
+  // l'état local n'est pas rollback (l'utilisateur peut reload pour resync).
+  const persist = useCallback((label, promise) => {
+    Promise.resolve(promise).catch(e => {
+      console.error(`Sync ${label} échouée`, e);
+      toast?.(`Sync ${label} échouée : ${e.message}`, 'error');
+    });
+  }, [toast]);
 
   // Tick chaque seconde uniquement si timer actif (sinon laisse le CPU tranquille)
   useEffect(() => {
@@ -2354,44 +3178,61 @@ function JessyDashboard() {
   }, [timer]);
 
   const updateProject = (data, opts = {}) => {
+    if (blockIfViewer('Modification')) return;
     setProjects(prev => prev.map(p => p.id === data.id ? data : p));
     if (selectedProject?.id === data.id) setSelectedProject(data);
     if (opts.toast) toast?.(opts.toast);
+    persist('projet', cryptStore.updateProject(data));
   };
   const deleteProject = (id) => {
+    if (blockIfViewer('Suppression')) return;
     const p = projects.find(x => x.id === id);
     setProjects(prev => prev.filter(x => x.id !== id));
     setInvoices(prev => prev.filter(i => i.projectId !== id));
     toast?.(`« ${p?.title || 'Projet'} » supprimé`);
+    persist('suppression projet', cryptStore.deleteProject(id));
   };
   const createProject = (p) => {
+    if (blockIfViewer('Création')) return;
     setProjects(prev => [...prev, p]);
     toast?.('Projet créé');
+    persist('création projet', cryptStore.createProject(p));
   };
   const duplicateProject = (project) => {
+    if (blockIfViewer('Duplication')) return;
     const dup = duplicateProjectData(project);
     setProjects(prev => [...prev, dup]);
     setSelectedProject(dup);
     toast?.(`Projet dupliqué : ${dup.title}`, 'info');
+    persist('duplication projet', cryptStore.createProject(dup));
   };
   const createClient = (c) => {
+    if (blockIfViewer('Création')) return;
     setClients(prev => [...prev, c]);
     toast?.('Client ajouté');
+    persist('création client', cryptStore.createClient(c));
   };
   const updateClient = (data) => {
+    if (blockIfViewer('Modification')) return;
     setClients(prev => prev.map(c => c.id === data.id ? data : c));
     if (selectedClient?.id === data.id) setSelectedClient(data);
     toast?.('Client mis à jour');
+    persist('client', cryptStore.updateClient(data));
   };
   const deleteClient = (id) => {
+    if (blockIfViewer('Suppression')) return;
     const c = clients.find(x => x.id === id);
     const projIds = projects.filter(p => p.clientId === id).map(p => p.id);
     setClients(prev => prev.filter(x => x.id !== id));
     setProjects(prev => prev.filter(p => p.clientId !== id));
     setInvoices(prev => prev.filter(i => i.clientId !== id && !projIds.includes(i.projectId)));
     toast?.(`${c?.company || 'Client'} supprimé`);
+    // Cascade DB s'occupera des projects/invoices/tasks/etc.
+    persist('suppression client', cryptStore.deleteClient(id));
   };
   const updateInvoice = (id, patch) => {
+    if (blockIfViewer('Modification')) return;
+    const previous = invoices.find(x => x.id === id);
     setInvoices(prev => prev.map(i => {
       if (i.id !== id) return i;
       const updated = { ...i, ...patch };
@@ -2404,9 +3245,27 @@ function JessyDashboard() {
       return updated;
     }));
     if (patch.status === 'paid') toast?.('Facture marquée payée');
+    if (previous) {
+      const updated = { ...previous, ...patch };
+      persist('facture', cryptStore.updateInvoice(updated));
+      // Sync paidAmount projet si changement de statut
+      if (patch.status === 'paid' && previous.status !== 'paid') {
+        const proj = projects.find(p => p.id === previous.projectId);
+        if (proj) persist('projet (montants)', cryptStore.patchProjectAmounts(proj.id, {
+          paidAmount: Math.min(proj.budget, (proj.paidAmount || 0) + previous.amount)
+        }));
+      } else if (patch.status && patch.status !== 'paid' && previous.status === 'paid') {
+        const proj = projects.find(p => p.id === previous.projectId);
+        if (proj) persist('projet (montants)', cryptStore.patchProjectAmounts(proj.id, {
+          paidAmount: Math.max(0, (proj.paidAmount || 0) - previous.amount)
+        }));
+      }
+    }
   };
   const deleteInvoice = (inv) => {
+    if (blockIfViewer('Suppression')) return;
     setInvoices(prev => prev.filter(i => i.id !== inv.id));
+    const proj = projects.find(p => p.id === inv.projectId);
     setProjects(prev => prev.map(p => {
       if (p.id !== inv.projectId) return p;
       return {
@@ -2416,34 +3275,65 @@ function JessyDashboard() {
       };
     }));
     toast?.('Facture supprimée');
+    persist('suppression facture', cryptStore.deleteInvoice(inv.id));
+    if (proj) {
+      persist('projet (montants)', cryptStore.patchProjectAmounts(proj.id, {
+        invoicedAmount: Math.max(0, (proj.invoicedAmount || 0) - inv.amount),
+        paidAmount: inv.status === 'paid' ? Math.max(0, (proj.paidAmount || 0) - inv.amount) : proj.paidAmount
+      }));
+    }
   };
   const createInvoice = (inv) => {
+    if (blockIfViewer('Création')) return;
     setInvoices(prev => [...prev, inv]);
+    const proj = projects.find(p => p.id === inv.projectId);
     setProjects(prev => prev.map(p => p.id === inv.projectId ? { ...p, invoicedAmount: (p.invoicedAmount || 0) + inv.amount } : p));
     toast?.(`Facture ${inv.number} émise`);
+    persist('création facture', cryptStore.createInvoice(inv));
+    if (proj) {
+      persist('projet (montants)', cryptStore.patchProjectAmounts(proj.id, {
+        invoicedAmount: (proj.invoicedAmount || 0) + inv.amount
+      }));
+    }
   };
   const moveStage = (projectId, newStage) => {
-    setProjects(prev => prev.map(p => p.id === projectId ? { ...p, stage: newStage } : p));
+    if (blockIfViewer('Déplacement')) return;
     const p = projects.find(x => x.id === projectId);
+    const patch = { stage: newStage };
+    if (newStage === 'paid' && p) {
+      // Encaissé = soldé : on aligne facturé/encaissé sur le budget.
+      patch.invoicedAmount = Math.max(p.invoicedAmount || 0, p.budget);
+      patch.paidAmount = p.budget;
+    }
+    setProjects(prev => prev.map(x => x.id === projectId ? { ...x, ...patch } : x));
+    if (selectedProject?.id === projectId) setSelectedProject(prev => ({ ...prev, ...patch }));
     const meta = STAGES.find(s => s.id === newStage);
-    if (p && p.stage !== newStage) toast?.(`${p.title} → ${meta?.label}`, 'info');
+    if (p && p.stage !== newStage) {
+      toast?.(`${p.title} → ${meta?.label}`, 'info');
+      persist('stage projet', cryptStore.patchProjectAmounts(projectId, patch));
+    }
   };
   const resetData = () => {
+    if (blockIfViewer('Reset')) return;
     setClients([]);
     setProjects([]);
     setInvoices([]);
     setTimer(null);
     setConfirmReset(false);
     toast?.('Toutes les données ont été effacées', 'info');
+    persist('reset DB', cryptStore.resetAll(session?.user?.id));
   };
 
   // Timer: enregistre les heures sur le projet courant et stoppe.
   // opts.silent évite le toast (utile lors d'un switch automatique).
   const stopTimer = (opts = {}) => {
     if (!timer) return;
+    if (blockIfViewer('Timer')) return;
     const hours = elapsedToHours(Date.now() - timer.startedAt);
     const projectId = timer.projectId;
     const round025 = (v) => Math.round(v * 4) / 4;
+    const proj = projects.find(p => p.id === projectId);
+    const newHours = proj ? round025((proj.hoursLogged || 0) + hours) : null;
     setProjects(prev => prev.map(p => p.id === projectId
       ? { ...p, hoursLogged: round025((p.hoursLogged || 0) + hours) }
       : p));
@@ -2452,9 +3342,10 @@ function JessyDashboard() {
       : curr);
     setTimer(null);
     if (!opts.silent) {
-      const project = projects.find(p => p.id === projectId);
-      toast?.(`+${hours}h enregistrée${hours > 1 ? 's' : ''}${project ? ' · ' + project.title : ''}`);
+      toast?.(`+${hours}h enregistrée${hours > 1 ? 's' : ''}${proj ? ' · ' + proj.title : ''}`);
     }
+    persist('timer', cryptStore.setTimer(session?.user?.id, null));
+    if (newHours != null) persist('heures projet', cryptStore.patchProjectAmounts(projectId, { hoursLogged: newHours }));
   };
 
   const startTimer = (projectId) => {
@@ -2462,8 +3353,10 @@ function JessyDashboard() {
     if (!project) return;
     if (timer && timer.projectId === projectId) return;
     if (timer) stopTimer({ silent: true });
-    setTimer({ projectId, startedAt: Date.now() });
+    const next = { projectId, startedAt: Date.now() };
+    setTimer(next);
     toast?.(`Timer démarré · ${project.title}`, 'info');
+    persist('timer', cryptStore.setTimer(session?.user?.id, next));
   };
 
   // Raccourci clavier global pour la recherche
@@ -2484,13 +3377,14 @@ function JessyDashboard() {
     { id: 'projects', label: 'Projets', icon: FolderKanban },
     { id: 'calendar', label: 'Calendrier', icon: CalendarDays },
     { id: 'invoices', label: 'Facturation', icon: Receipt },
-    { id: 'clients', label: 'Clients', icon: Users }
+    { id: 'clients', label: 'Clients', icon: Users },
+    ...(isAdmin ? [{ id: 'team', label: 'Équipe', icon: Shield }] : [])
   ];
 
   const totalNotifs =
     invoices.filter(i => i.status === 'overdue').length +
-    projects.filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) < 0).length +
-    projects.filter(p => p.stage !== 'invoicing' && daysUntil(p.deadline) >= 0 && daysUntil(p.deadline) <= 5).length +
+    projects.filter(p => !isClosedStage(p.stage) && daysUntil(p.deadline) < 0).length +
+    projects.filter(p => !isClosedStage(p.stage) && daysUntil(p.deadline) >= 0 && daysUntil(p.deadline) <= 5).length +
     projects.reduce((s, p) => s + (p.revisionHistory || []).filter(r => r.status === 'pending').length, 0);
 
   if (session === undefined) return null; // toujours en train de vérifier la session
@@ -2500,6 +3394,19 @@ function JessyDashboard() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
   };
+
+  // Si la vue active n'est plus accessible (ex: admin → viewer en cours de session),
+  // on rebascule sur Today via effet pour éviter setState pendant le render.
+  useEffect(() => {
+    if (activeView === 'team' && !isAdmin) setActiveView('today');
+  }, [activeView, isAdmin]);
+
+  const userInitials = (session?.user?.user_metadata?.name || session?.user?.email || 'JE')
+    .split(/[\s@.]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(s => s[0]?.toUpperCase())
+    .join('') || 'JE';
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-200 grain font-body">
@@ -2538,11 +3445,15 @@ function JessyDashboard() {
               </div>
               <div className="text-[11px] text-zinc-500 font-body leading-relaxed">Mock activé · webhook prêt à brancher</div>
             </div>
-            <div className="px-2 py-1.5 flex items-center gap-2 text-[11px] text-zinc-500 font-mono truncate">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0"></div>
-              <span className="truncate">{session?.user?.email}</span>
+            <div className="px-2 py-1.5 space-y-1.5">
+              <div className="flex items-center gap-2 text-[11px] text-zinc-500 font-mono truncate">
+                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0"></div>
+                <span className="truncate">{session?.user?.email}</span>
+              </div>
+              <RoleBadge role={currentRole} />
             </div>
-            <button onClick={() => setConfirmReset(true)} className="w-full flex items-center gap-2 text-[11px] text-zinc-600 hover:text-zinc-300 px-2 py-1.5 transition-colors font-mono">
+            <button onClick={() => setConfirmReset(true)} disabled={isViewer}
+              className="w-full flex items-center gap-2 text-[11px] text-zinc-600 hover:text-zinc-300 disabled:hover:text-zinc-700 disabled:cursor-not-allowed px-2 py-1.5 transition-colors font-mono">
               <RotateCcw className="w-3 h-3" /> Effacer toutes les données
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 text-[11px] text-zinc-600 hover:text-rose-300 px-2 py-1.5 transition-colors font-mono">
@@ -2604,8 +3515,14 @@ function JessyDashboard() {
                   />
                 )}
               </div>
-              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-xs font-bold text-zinc-950">JE</div>
+              <div title={session?.user?.email} className="w-9 h-9 rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-xs font-bold text-zinc-950">{userInitials}</div>
             </div>
+            {isViewer && (
+              <div className="px-6 py-2 border-t border-zinc-800/80 bg-zinc-900/40 flex items-center gap-2 text-xs text-zinc-400">
+                <Eye className="w-3.5 h-3.5 text-zinc-500" />
+                <span>Mode lecture seule — tu peux consulter mais pas modifier les données.</span>
+              </div>
+            )}
           </header>
 
           <div className="flex-1 p-6 overflow-y-auto scrollbar-thin">
@@ -2626,6 +3543,9 @@ function JessyDashboard() {
             )}
             {activeView === 'clients' && (
               <ClientsView clients={clients} projects={projects} invoices={invoices} onNewClient={() => setShowNewClient(true)} onSelectClient={setSelectedClient} searchQuery={searchQuery} />
+            )}
+            {activeView === 'team' && isAdmin && (
+              <TeamView currentUserId={session?.user?.id} />
             )}
           </div>
         </main>
