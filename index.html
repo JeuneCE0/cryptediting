@@ -3387,6 +3387,14 @@ function JessyDashboard() {
     projects.filter(p => !isClosedStage(p.stage) && daysUntil(p.deadline) >= 0 && daysUntil(p.deadline) <= 5).length +
     projects.reduce((s, p) => s + (p.revisionHistory || []).filter(r => r.status === 'pending').length, 0);
 
+  // Si la vue active n'est plus accessible (ex: admin → viewer en cours de session),
+  // on rebascule sur Today via effet pour éviter setState pendant le render.
+  // ⚠️ Doit rester AVANT tout return conditionnel (règles des hooks) : sinon le
+  // nombre de hooks varie entre les renders (session/loading) → React error #310.
+  useEffect(() => {
+    if (activeView === 'team' && !isAdmin) setActiveView('today');
+  }, [activeView, isAdmin]);
+
   if (session === undefined) return null; // toujours en train de vérifier la session
   if (!session) return <LoginScreen />;
   if (loading) return null;
@@ -3394,12 +3402,6 @@ function JessyDashboard() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
   };
-
-  // Si la vue active n'est plus accessible (ex: admin → viewer en cours de session),
-  // on rebascule sur Today via effet pour éviter setState pendant le render.
-  useEffect(() => {
-    if (activeView === 'team' && !isAdmin) setActiveView('today');
-  }, [activeView, isAdmin]);
 
   const userInitials = (session?.user?.user_metadata?.name || session?.user?.email || 'JE')
     .split(/[\s@.]+/)
