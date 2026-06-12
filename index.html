@@ -1092,7 +1092,6 @@ const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoi
               <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono">Échéance</th>
               <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono text-right">Montant</th>
               <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono">Statut</th>
-              <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono">GHL</th>
               <th className="px-4 py-3"></th>
             </tr>
           </thead>
@@ -1110,11 +1109,6 @@ const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoi
                   <td className="px-4 py-3 font-mono text-sm text-zinc-100 text-right">{eur(inv.amount)}</td>
                   <td className="px-4 py-3"><StatusPill status={inv.status} /></td>
                   <td className="px-4 py-3">
-                    <a href={inv.ghlLink} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="text-xs text-zinc-500 hover:text-amber-400 inline-flex items-center gap-1 font-mono">
-                      mock <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </td>
-                  <td className="px-4 py-3">
                     <div className="flex items-center gap-2 justify-end">
                       {inv.status !== 'paid' && (
                         <button onClick={() => onUpdateInvoice(inv.id, { status: 'paid', paidDate: today.toISOString().slice(0, 10) })} className="text-xs text-emerald-400 hover:text-emerald-300 font-medium font-body whitespace-nowrap">
@@ -1130,14 +1124,10 @@ const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoi
               );
             })}
             {filtered.length === 0 && (
-              <tr><td colSpan="9" className="px-4 py-12 text-center text-zinc-500 text-sm">{searchQuery ? 'Aucune facture ne correspond à la recherche.' : 'Aucune facture.'}</td></tr>
+              <tr><td colSpan="8" className="px-4 py-12 text-center text-zinc-500 text-sm">{searchQuery ? 'Aucune facture ne correspond à la recherche.' : 'Aucune facture.'}</td></tr>
             )}
           </tbody>
         </table>
-      </div>
-
-      <div className="text-xs text-zinc-500 font-body italic">
-        💡 Intégration GHL en mock. Une fois branché, les statuts de paiement remonteront automatiquement via webhook.
       </div>
     </div>
   );
@@ -1519,7 +1509,7 @@ const ProjectRevisions = ({ project, client, onUpdate }) => {
 };
 
 // ============ PROJECT DETAIL MODAL ============
-const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete, onUpdateInvoice, onDuplicate, timer, onStartTimer, onStopTimer }) => {
+const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onMoveStage, onDelete, onUpdateInvoice, onDuplicate, timer, onStartTimer, onStopTimer }) => {
   const [editing, setEditing] = useState(false);
   const [data, setData] = useState(project);
   const [confirmDel, setConfirmDel] = useState(false);
@@ -1535,23 +1525,13 @@ const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onDelete
     onUpdate(data, { toast: 'Projet mis à jour' });
     setEditing(false);
   };
+  // Le changement de stage (montants + resync des factures « Encaissé ») est
+  // centralisé dans moveStage au niveau du dashboard, partagé avec le kanban.
   const advanceStage = () => {
-    if (stageIdx < STAGES.length - 1) {
-      const next = STAGES[stageIdx + 1];
-      const patch = { ...project, stage: next.id };
-      if (next.id === 'paid') {
-        // Encaissé = soldé : on aligne facturé/encaissé sur le budget.
-        patch.invoicedAmount = Math.max(project.invoicedAmount || 0, project.budget);
-        patch.paidAmount = project.budget;
-      }
-      onUpdate(patch, { toast: `→ ${next.label}` });
-    }
+    if (stageIdx < STAGES.length - 1) onMoveStage(project.id, STAGES[stageIdx + 1].id);
   };
   const previousStage = () => {
-    if (stageIdx > 0) {
-      const prev = STAGES[stageIdx - 1];
-      onUpdate({ ...project, stage: prev.id }, { toast: `→ ${prev.label}` });
-    }
+    if (stageIdx > 0) onMoveStage(project.id, STAGES[stageIdx - 1].id);
   };
 
   return (
@@ -2072,8 +2052,7 @@ const NewInvoiceModal = ({ projects, clients, invoices, onClose, onCreate }) => 
       status: 'pending',
       issueDate: today.toISOString().slice(0, 10),
       dueDate: data.dueDate,
-      paidDate: null,
-      ghlLink: `https://app.gohighlevel.com/inv/mock-${48 + invoices.length}`
+      paidDate: null
     });
     onClose();
   };
@@ -2823,8 +2802,7 @@ const cryptStore = {
       project_id: i.projectId, client_id: i.clientId,
       amount: num(i.amount), status: i.status || 'pending',
       issue_date: dateOnly(i.issueDate), due_date: dateOnly(i.dueDate),
-      paid_date: dateOnly(i.paidDate),
-      ghl_link: i.ghlLink || null
+      paid_date: dateOnly(i.paidDate)
     };
     if (opts.excludeId) delete o.id;
     return o;
@@ -2835,8 +2813,7 @@ const cryptStore = {
     amount: num(r.amount), status: r.status,
     issueDate: dateOnly(r.issue_date),
     dueDate: dateOnly(r.due_date),
-    paidDate: dateOnly(r.paid_date),
-    ghlLink: r.ghl_link || ''
+    paidDate: dateOnly(r.paid_date)
   }),
 
   // ---- Hydrate (charge tout en parallèle) ----
@@ -3296,22 +3273,54 @@ function JessyDashboard() {
       }));
     }
   };
+  // Changement de stage centralisé (kanban + détail projet).
+  // « Encaissé » solde le projet ET marque ses factures payées (sinon les KPI et
+  // les relances restent désynchronisés) ; en ressortir annule l'encaissement.
   const moveStage = (projectId, newStage) => {
     if (blockIfViewer('Déplacement')) return;
     const p = projects.find(x => x.id === projectId);
+    if (!p || p.stage === newStage) return;
+
+    const projInvoices = invoices.filter(i => i.projectId === projectId);
+    const goingPaid = newStage === 'paid';
+    const leavingPaid = p.stage === 'paid';
+    const todayStr = today.toISOString().slice(0, 10);
+
+    // Resync des factures selon l'entrée / la sortie d'« Encaissé »
+    let invoiceUpdates = [];
+    if (goingPaid) {
+      invoiceUpdates = projInvoices.filter(i => i.status !== 'paid')
+        .map(i => ({ ...i, status: 'paid', paidDate: todayStr }));
+    } else if (leavingPaid) {
+      invoiceUpdates = projInvoices.filter(i => i.status === 'paid')
+        .map(i => ({ ...i, status: 'pending', paidDate: null }));
+    }
+
+    // Montants du projet
     const patch = { stage: newStage };
-    if (newStage === 'paid' && p) {
-      // Encaissé = soldé : on aligne facturé/encaissé sur le budget.
+    if (goingPaid) {
+      // Soldé : facturé au moins égal au budget, intégralement encaissé.
       patch.invoicedAmount = Math.max(p.invoicedAmount || 0, p.budget);
       patch.paidAmount = p.budget;
+    } else if (leavingPaid) {
+      // Recalcul depuis les factures réelles (désormais remises en attente).
+      patch.invoicedAmount = projInvoices.reduce((s, i) => s + i.amount, 0);
+      patch.paidAmount = 0;
+    }
+
+    // Mise à jour du state
+    if (invoiceUpdates.length) {
+      const byId = Object.fromEntries(invoiceUpdates.map(i => [i.id, i]));
+      setInvoices(prev => prev.map(i => byId[i.id] || i));
     }
     setProjects(prev => prev.map(x => x.id === projectId ? { ...x, ...patch } : x));
     if (selectedProject?.id === projectId) setSelectedProject(prev => ({ ...prev, ...patch }));
+
+    // Toast + persistance
     const meta = STAGES.find(s => s.id === newStage);
-    if (p && p.stage !== newStage) {
-      toast?.(`${p.title} → ${meta?.label}`, 'info');
-      persist('stage projet', cryptStore.patchProjectAmounts(projectId, patch));
-    }
+    toast?.(`${p.title} → ${meta?.label}`, 'info');
+    persist('stage projet', cryptStore.patchProjectAmounts(projectId, patch));
+    invoiceUpdates.forEach(inv => persist('facture (sync Encaissé)', cryptStore.updateInvoice(inv)));
   };
   const resetData = () => {
     if (blockIfViewer('Reset')) return;
@@ -3440,13 +3449,6 @@ function JessyDashboard() {
           </nav>
 
           <div className="p-3 border-t border-zinc-800/80 space-y-2">
-            <div className="bg-zinc-900/60 rounded-lg p-3">
-              <div className="flex items-center gap-2 mb-2">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <div className="text-xs font-medium text-zinc-200">GHL connecté</div>
-              </div>
-              <div className="text-[11px] text-zinc-500 font-body leading-relaxed">Mock activé · webhook prêt à brancher</div>
-            </div>
             <div className="px-2 py-1.5 space-y-1.5">
               <div className="flex items-center gap-2 text-[11px] text-zinc-500 font-mono truncate">
                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0"></div>
@@ -3553,7 +3555,7 @@ function JessyDashboard() {
         </main>
       </div>
 
-      {selectedProject && <ProjectDetail project={selectedProject} clients={clients} invoices={invoices} onClose={() => setSelectedProject(null)} onUpdate={updateProject} onDelete={deleteProject} onUpdateInvoice={updateInvoice} onDuplicate={duplicateProject} timer={timer} onStartTimer={startTimer} onStopTimer={stopTimer} />}
+      {selectedProject && <ProjectDetail project={selectedProject} clients={clients} invoices={invoices} onClose={() => setSelectedProject(null)} onUpdate={updateProject} onMoveStage={moveStage} onDelete={deleteProject} onUpdateInvoice={updateInvoice} onDuplicate={duplicateProject} timer={timer} onStartTimer={startTimer} onStopTimer={stopTimer} />}
       {selectedClient && <ClientDetail client={selectedClient} projects={projects} invoices={invoices} onClose={() => setSelectedClient(null)} onUpdate={updateClient} onDelete={deleteClient} onSelectProject={setSelectedProject} />}
       {showNewProject && <NewProjectModal clients={clients} onClose={() => setShowNewProject(false)} onCreate={createProject} onCreateClient={() => setShowNewClient(true)} />}
       {showNewClient && <NewClientModal onClose={() => setShowNewClient(false)} onCreate={createClient} />}
