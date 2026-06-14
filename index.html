@@ -33,6 +33,7 @@
   @keyframes pulse-glow { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
   .animate-pulse-slow { animation: pulse-glow 2.5s ease-in-out infinite; }
   #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #09090b; color: #71717a; z-index: 100; }
+  :focus-visible { outline: 2px solid #fbbf24; outline-offset: 2px; border-radius: 4px; }
 </style>
 </head>
 <body class="grain">
@@ -365,6 +366,22 @@ const useEscape = (active, handler) => {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [active, handler]);
+};
+
+// ModalShell : overlay + backdrop pour les modales qui fournissent leur propre conteneur en children.
+const ModalShell = ({ onClose, children }) => {
+  useEscape(true, onClose);
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in">
+      {children}
+    </div>
+  );
+};
+
+// safeUrl : n'autorise que http(s) pour les liens saisis par l'utilisateur (anti-XSS javascript:/data:).
+const safeUrl = (u) => {
+  try { const p = new URL(u); return (p.protocol === 'http:' || p.protocol === 'https:') ? u : '#'; }
+  catch (e) { return '#'; }
 };
 
 // ============ COMPONENTS ============
@@ -1444,7 +1461,7 @@ const ProjectDeliverables = ({ project, client, onUpdate }) => {
                     <span className="text-sm text-zinc-200 font-medium truncate">{d.label}</span>
                     <span className={`text-[10px] font-mono uppercase tracking-wider ${meta.color}`}>{meta.label}</span>
                   </div>
-                  <a href={d.url} target="_blank" rel="noreferrer" className="text-xs text-zinc-500 hover:text-amber-400 font-mono truncate inline-flex items-center gap-1">
+                  <a href={safeUrl(d.url)} target="_blank" rel="noreferrer" className="text-xs text-zinc-500 hover:text-amber-400 font-mono truncate inline-flex items-center gap-1">
                     {d.url} <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>
@@ -1683,7 +1700,7 @@ const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onMoveSt
               <div className="flex justify-between items-center">
                 <span className="text-sm text-zinc-400 font-body">Budget</span>
                 {editing ? (
-                  <input type="number" value={data.budget} onChange={e => setData({ ...data, budget: parseFloat(e.target.value) })} className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm font-mono text-zinc-200 w-24 text-right" />
+                  <input type="number" value={data.budget} onChange={e => setData({ ...data, budget: parseFloat(e.target.value) || 0 })} className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm font-mono text-zinc-200 w-24 text-right" />
                 ) : (
                   <span className="font-mono text-sm text-zinc-100">{eur(project.budget)}</span>
                 )}
@@ -1702,7 +1719,7 @@ const ProjectDetail = ({ project, clients, invoices, onClose, onUpdate, onMoveSt
               </div>
               <div className="pt-2">
                 <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                  <div className="h-full bg-emerald-500" style={{ width: `${Math.min(100, (project.paidAmount / project.budget) * 100)}%` }}></div>
+                  <div className="h-full bg-emerald-500" style={{ width: `${project.budget > 0 ? Math.min(100, (project.paidAmount / project.budget) * 100) : 0}%` }}></div>
                 </div>
               </div>
               <div className="flex justify-between items-center pt-2 border-t border-zinc-800/60">
@@ -2102,7 +2119,15 @@ const NewInvoiceModal = ({ projects, clients, invoices, onClose, onCreate }) => 
   const toast = useToast();
 
   const project = projects.find(p => p.id === data.projectId);
-  const nextNumber = `JESSY-${today.getFullYear()}-${String(invoices.length + 1).padStart(4, '0')}`;
+  // Numéro fiable : basé sur le MAX des numéros de l'année (pas invoices.length → pas de collision après suppression).
+  const nextNumber = useMemo(() => {
+    const year = new Date().getFullYear();
+    const prefix = `JESSY-${year}-`;
+    const maxSeq = invoices
+      .filter(i => (i.number || '').startsWith(prefix))
+      .reduce((m, i) => Math.max(m, parseInt((i.number || '').slice(prefix.length), 10) || 0), 0);
+    return `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
+  }, [invoices]);
   const valid = project && parseFloat(data.amount) > 0 && data.dueDate;
 
   const submit = () => {
@@ -2117,7 +2142,7 @@ const NewInvoiceModal = ({ projects, clients, invoices, onClose, onCreate }) => 
       clientId: project.clientId,
       amount: parseFloat(data.amount),
       status: 'pending',
-      issueDate: today.toISOString().slice(0, 10),
+      issueDate: new Date().toISOString().slice(0, 10),
       dueDate: data.dueDate,
       paidDate: null
     });
@@ -2867,7 +2892,7 @@ const cryptStore = {
     const o = {
       id: i.id, number: i.number,
       project_id: i.projectId, client_id: i.clientId,
-      amount: num(i.amount), status: i.status || 'pending',
+      amount: num(i.amount), status: (i.status === 'overdue' ? 'pending' : (i.status || 'pending')),
       issue_date: dateOnly(i.issueDate), due_date: dateOnly(i.dueDate),
       paid_date: dateOnly(i.paidDate)
     };
@@ -3102,7 +3127,7 @@ function JessyDashboard() {
 
   // Rôle courant — valeur par défaut sûre tant que session n'est pas chargée.
   // L'UI principale n'est rendue qu'après auth donc le calcul est cohérent au render.
-  const currentRole = (session?.user?.user_metadata?.role) || 'member';
+  const currentRole = (session?.user?.app_metadata?.role) || (session?.user?.user_metadata?.role) || 'member';
   const isAdmin = currentRole === 'admin';
   const isViewer = currentRole === 'viewer';
   const blockIfViewer = (label) => {
@@ -3209,7 +3234,9 @@ function JessyDashboard() {
 
   // Helper : enveloppe un appel cryptStore. Si erreur réseau/RLS, on toast ;
   // l'état local n'est pas rollback (l'utilisateur peut reload pour resync).
+  const lastLocalWriteRef = useRef(0);
   const persist = useCallback((label, promise) => {
+    lastLocalWriteRef.current = Date.now();
     Promise.resolve(promise).catch(e => {
       console.error(`Sync ${label} échouée`, e);
       toast?.(`Sync ${label} échouée : ${e.message}`, 'error');
@@ -3226,23 +3253,24 @@ function JessyDashboard() {
     let cancelled = false;
 
     const rehydrate = async () => {
+      // Anti-écho : on ne recharge pas juste après une écriture locale (Supabase nous renvoie aussi nos propres changements).
+      if (Date.now() - lastLocalWriteRef.current < 2500) { scheduleReload(); return; }
       try {
         const fresh = await cryptStore.hydrate();
         if (cancelled) return;
-        const freshProjects = fresh.projects.map(migrateProject);
+        // On rafraîchit les listes de fond mais on NE remplace PAS selectedProject/selectedClient
+        // pour ne pas écraser une modale en cours d'édition.
         setClients(fresh.clients);
-        setProjects(freshProjects);
+        setProjects(fresh.projects.map(migrateProject));
         setInvoices(reconcileInvoiceStatus(fresh.invoices));
         setTimer(fresh.timer);
-        setSelectedProject(prev => prev ? (freshProjects.find(p => p.id === prev.id) || null) : prev);
-        setSelectedClient(prev => prev ? (fresh.clients.find(c => c.id === prev.id) || null) : prev);
       } catch (e) {
         console.error('Resync temps réel échoué', e);
       }
     };
     const scheduleReload = () => {
       if (reloadTimer.current) clearTimeout(reloadTimer.current);
-      reloadTimer.current = setTimeout(rehydrate, 1000);
+      reloadTimer.current = setTimeout(rehydrate, 1500);
     };
 
     const channel = supabase.channel('jessy-db-changes');
@@ -3469,6 +3497,7 @@ function JessyDashboard() {
   };
 
   const startTimer = (projectId) => {
+    if (blockIfViewer('Timer')) return;
     const project = projects.find(p => p.id === projectId);
     if (!project) return;
     if (timer && timer.projectId === projectId) return;
@@ -3490,6 +3519,30 @@ function JessyDashboard() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Raccourcis : g+lettre (navigation), n (nouveau selon la vue). Ignorés quand on tape dans un champ.
+  const gChordRef = useRef({ active: false, ts: 0 });
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'g') { gChordRef.current = { active: true, ts: Date.now() }; return; }
+      if (gChordRef.current.active && Date.now() - gChordRef.current.ts < 700) {
+        const map = { t: 'today', d: 'dashboard', p: 'projects', c: 'clients', f: 'invoices', a: 'calendar' };
+        gChordRef.current.active = false;
+        if (map[e.key]) { e.preventDefault(); setActiveView(map[e.key]); setMobileNavOpen(false); return; }
+      }
+      if (e.key === 'n' && !isViewer) {
+        e.preventDefault();
+        if (activeView === 'invoices') { if (projects.length) setShowNewInvoice(true); }
+        else if (activeView === 'clients') setShowNewClient(true);
+        else setShowNewProject(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [activeView, projects.length, isViewer]);
 
   const navItems = [
     { id: 'today', label: "Aujourd'hui", icon: Sun },
@@ -3639,7 +3692,7 @@ function JessyDashboard() {
                 );
               })()}
               <div className="relative">
-                <button onClick={() => setShowNotifs(v => !v)} className="w-9 h-9 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center relative transition-colors">
+                <button onClick={() => setShowNotifs(v => !v)} aria-label="Notifications" className="w-9 h-9 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center relative transition-colors">
                   <Bell className="w-4 h-4" />
                   {totalNotifs > 0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-400 text-zinc-950 text-[10px] font-bold flex items-center justify-center">{totalNotifs}</span>}
                 </button>
