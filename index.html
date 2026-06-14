@@ -3781,6 +3781,14 @@ createRoot(document.getElementById('root')).render(
 <script>
   // Enregistrement du service worker (PWA : chargements répétés rapides + offline app-shell).
   if ('serviceWorker' in navigator) {
+    // Quand une nouvelle version du SW prend le contrôle (nouveau déploiement), on recharge
+    // une seule fois pour servir la version fraîche sans laisser l'utilisateur sur un cache obsolète.
+    let swReloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (swReloaded) return;
+      swReloaded = true;
+      window.location.reload();
+    });
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     });

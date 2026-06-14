@@ -2,7 +2,7 @@
  * Objectif : chargements répétés rapides + offline de l'app-shell.
  * Règle d'or : NE JAMAIS mettre en cache les requêtes Supabase (auth + données).
  */
-const CACHE = 'jessy-v1';
+const CACHE = 'jessy-v2';
 
 // App-shell servi depuis la même origine.
 const SHELL = [
@@ -56,8 +56,10 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put('/index.html', copy));
+          if (res && res.ok && res.type === 'basic') {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put('/index.html', copy));
+          }
           return res;
         })
         .catch(() => caches.match('/index.html').then((r) => r || caches.match('/')))
@@ -80,16 +82,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Même origine (icônes, manifest, etc.) : cache-first.
+  // Même origine (icônes, manifest, etc.) : stale-while-revalidate (se rafraîchit en fond).
   if (url.origin === self.location.origin) {
     event.respondWith(
-      caches.match(req).then((cached) =>
-        cached || fetch(req).then((res) => {
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(req, copy));
-          }
-          return res;
+      caches.open(CACHE).then((cache) =>
+        cache.match(req).then((cached) => {
+          const network = fetch(req)
+            .then((res) => { if (res && res.ok) cache.put(req, res.clone()); return res; })
+            .catch(() => cached);
+          return cached || network;
         })
       )
     );
