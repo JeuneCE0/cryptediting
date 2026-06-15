@@ -1101,6 +1101,19 @@ const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoi
     })
     .sort(invoiceSorters[sort] || invoiceSorters.recent);
 
+  // Sélection multi-lignes (actions groupées)
+  const [selectedIds, setSelectedIds] = useState([]);
+  const selectedSet = new Set(selectedIds);
+  const allVisibleSelected = filtered.length > 0 && filtered.every(i => selectedSet.has(i.id));
+  const toggleOne = (id) => setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleAll = () => setSelectedIds(allVisibleSelected ? [] : filtered.map(i => i.id));
+  const selectedUnpaid = invoices.filter(i => selectedSet.has(i.id) && i.status !== 'paid');
+  const bulkMarkPaid = () => {
+    const ds = new Date().toISOString().slice(0, 10);
+    selectedUnpaid.forEach(i => onUpdateInvoice(i.id, { status: 'paid', paidDate: ds }));
+    setSelectedIds([]);
+  };
+
   const exportCSV = () => {
     const rows = [
       ['N°', 'Client', 'Projet', 'Émise', 'Échéance', 'Montant', 'Statut', 'Payée le']
@@ -1165,10 +1178,25 @@ const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoi
         </div>
       </div>
 
+      {selectedIds.length > 0 && (
+        <div className="flex items-center gap-3 flex-wrap bg-amber-500/5 border border-amber-500/20 rounded-lg px-4 py-2.5">
+          <span className="text-sm text-amber-200 font-body">{selectedIds.length} sélectionnée{selectedIds.length > 1 ? 's' : ''}</span>
+          {selectedUnpaid.length > 0 && (
+            <button onClick={bulkMarkPaid} className="text-xs text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 font-body transition-colors">
+              <Check className="w-3.5 h-3.5" /> Marquer payées ({selectedUnpaid.length})
+            </button>
+          )}
+          <button onClick={() => setSelectedIds([])} className="ml-auto text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1.5 font-body transition-colors">Désélectionner</button>
+        </div>
+      )}
+
       <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl overflow-hidden overflow-x-auto">
         <table className="w-full">
           <thead className="border-b border-zinc-800">
             <tr className="text-left">
+              <th className="px-4 py-3 w-10">
+                <input type="checkbox" checked={allVisibleSelected} onChange={toggleAll} aria-label="Tout sélectionner" className="accent-amber-500 cursor-pointer align-middle" />
+              </th>
               <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono">N°</th>
               <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono">Client</th>
               <th className="px-4 py-3 text-xs uppercase tracking-widest text-zinc-500 font-mono">Projet</th>
@@ -1184,7 +1212,10 @@ const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoi
               const client = clients.find(c => c.id === inv.clientId);
               const project = projects.find(p => p.id === inv.projectId);
               return (
-                <tr key={inv.id} className="border-b border-zinc-800/60 hover:bg-zinc-800/30 transition-colors">
+                <tr key={inv.id} className={`border-b border-zinc-800/60 hover:bg-zinc-800/30 transition-colors ${selectedSet.has(inv.id) ? 'bg-amber-500/5' : ''}`}>
+                  <td className="px-4 py-3">
+                    <input type="checkbox" checked={selectedSet.has(inv.id)} onChange={() => toggleOne(inv.id)} aria-label={`Sélectionner ${inv.number}`} className="accent-amber-500 cursor-pointer align-middle" />
+                  </td>
                   <td className="px-4 py-3 font-mono text-xs text-zinc-300">{inv.number}</td>
                   <td className="px-4 py-3 text-sm text-zinc-200">{client?.company}</td>
                   <td className="px-4 py-3 text-sm text-zinc-400 truncate max-w-[200px]">{project?.title}</td>
@@ -1208,7 +1239,7 @@ const InvoicesView = ({ invoices, clients, projects, onUpdateInvoice, onNewInvoi
               );
             })}
             {filtered.length === 0 && (
-              <tr><td colSpan="8" className="px-4 py-12 text-center text-zinc-500 text-sm">{searchQuery ? 'Aucune facture ne correspond à la recherche.' : 'Aucune facture.'}</td></tr>
+              <tr><td colSpan="9" className="px-4 py-12 text-center text-zinc-500 text-sm">{searchQuery ? 'Aucune facture ne correspond à la recherche.' : 'Aucune facture.'}</td></tr>
             )}
           </tbody>
         </table>
